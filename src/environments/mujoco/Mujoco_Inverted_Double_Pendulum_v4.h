@@ -18,6 +18,7 @@ class Mujoco_Inverted_Double_Pendulum_v4 : public MujocoEnv {
       n_eval_validation_ = std::any_cast<int>(params["mj_n_eval_validation"]);
       n_eval_test_ = std::any_cast<int>(params["mj_n_eval_test"]);
       max_step_ = std::any_cast<int>(params["mj_max_timestep"]);
+      max_sim_steps_ = max_step_ * frame_skip_;
       model_path_ =
           ExpandEnvVars(std::any_cast<std::string>(params["mj_model_path"]) +
                         "inverted_double_pendulum.xml");
@@ -65,7 +66,7 @@ class Mujoco_Inverted_Double_Pendulum_v4 : public MujocoEnv {
       step_++;
 
       // Update terminal state
-      terminalState = (y <= 1.0) || (step_ >= max_step_);
+      terminalState = (y <= 1.0) || time_limit_reached();
 
       return {reward, 0.0};  // TODO: add 'info' if needed
    }
@@ -93,7 +94,7 @@ class Mujoco_Inverted_Double_Pendulum_v4 : public MujocoEnv {
       }
    }
 
-   void reset(std::mt19937& rng) {
+   void reset(std::mt19937& rng, int& episode_number) {
       std::uniform_real_distribution<double> dis_pos(-0.1, 0.1);
       std::vector<double> qpos(m_->nq);
       for (size_t i = 0; i < qpos.size(); i++) {
@@ -110,6 +111,7 @@ class Mujoco_Inverted_Double_Pendulum_v4 : public MujocoEnv {
       set_state(qpos, qvel);
 
       step_ = 0;
+      sim_steps_elapsed_ = 0;
       get_obs(state_);
       terminalState = false;
    }
@@ -128,7 +130,7 @@ class Mujoco_Inverted_Double_Pendulum_v4 : public MujocoEnv {
           d_->site_xpos
               [2];  // site_xpos[0] corresponds to site 0, index 2 is z-coordinate
 
-      return step_ >= max_step_ || (y <= 1.0);
+      return time_limit_reached() || (y <= 1.0);
    }
 
    double reward;  // reward for current step

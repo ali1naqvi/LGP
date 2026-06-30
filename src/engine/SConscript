@@ -1,6 +1,6 @@
 Import('env')
 env.Library('TPG', ['TPG.cc', 'instruction.cc', 'RegisterMachine.h',
-                    'RegisterMachine.cc','point.cc','team.cc','misc.cc'],
+                    'RegisterMachine.cc','point.cc','team.cc','misc.cc', 'hebbian.cc'],
                     LIBS = ['boost_iostreams','eigen3', 'logging'],
                     LIBPATH = ['/lib/x86_64-linux-gnu/', '../logging'],
                     CPPPATH=['.','../environments','../experiments','/usr/include/eigen3', '../logging', '../logging/core', '../logging/loggers', '../logging/metrics', '../logging/storage'])

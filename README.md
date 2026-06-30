@@ -1,8 +1,9 @@
-# Tangled Program Graphs (TPG)
-
-This code reproduces results from the paper:
+# NEURO Tangled Program Graphs
+This code reproduces results from the paper: 
 
 Stephen Kelly, Tatiana Voegerl, Wolfgang Banzhaf, and Cedric Gondro. Evolving Hierarchical Memory-Prediction Machines in Multi-Task Reinforcement Learning. Genetic Programming and Evolvable Machines, 2021. [pdf](https://rdcu.be/czd3s)
+
+This branch is curated for Self-Modifying Mutation Rates. For the additional parameters introduced, please look at the parameters in config files and adjust based on your own task. All tasks being updated on main should work!
 
 ## Quick Start
 
@@ -23,10 +24,23 @@ From the tpg directory run:
 ```
 sudo xargs --arg-file requirements.txt apt install
 ```
+From [MuJoco](https://mujoco.org/), choose what version you would like and update the commands specific to your environment:
 
-Note that [MuJoco](https://mujoco.org/) must be downloaded and unpacked separately.
+```
+wget https://github.com/deepmind/mujoco/releases/download/3.2.2/mujoco-3.2.2-linux-aarch64.tar.gz
+tar -xzf mujoco-3.2.2-linux-x86_64.tar.gz
+```
 
-### 2. Set environment variables
+Since there is also the addition of a maze environment, use this at the start:
+```
+git submodule update --init --recursive
+```
+and this after changing up the environment
+```
+git submodule update --remote --merge
+```
+
+### 2. Set environment variables for DRA
 
 In order to easily access tpg scripts, we add appropriate folders to the $PATH environment variable.
 To do so, add the following to _~/.profile_
@@ -37,6 +51,17 @@ export PATH=$PATH:$TPG/scripts/plot
 export PATH=$PATH:$TPG/scripts/run
 export MUJOCO=<YOUR_PATH_TO_MUJOCO>/mujoco-3.2.2
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$MUJOCO/lib/
+```
+
+(For reference, I run):
+```
+export TPG=/root/tpg
+export PATH=$PATH:$TPG/scripts/plot
+export PATH=$PATH:$TPG/scripts/run
+export MUJOCO=/root/mujoco-3.2.2
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$MUJOCO/lib/
+export OMPI_ALLOW_RUN_AS_ROOT=1
+export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
 ```
 
 Then run:
@@ -98,34 +123,60 @@ make clean
 
 Refer to the [wiki](https://gitlab.cas.mcmaster.ca/kellys32/tpg/-/wikis/Running-Experiments-with-the-TPG-CLI) for more information on how to run experiments with the CLI
 
-To run an experiment for [Mujoco Inverted Pendulum](https://gymnasium.farama.org/environments/mujoco/inverted_pendulum/) using 4 parallel MPI processes, we can use the `tpg` CLI tool to execute experiments:
-
+Use this to run an experiment (where the name here is your yaml file): 
 ```
 tpg evolve inverted_pendulum
 ```
 
-The logs, plots, and replay videos would populate within the `experiments/inverted_pendulum` directory
+for multiple tests: 
+```
+for seed in `seq 1 3`; do tpg-run-mpi.sh -n 5 -s $seed; done
+```
 
-Note that as of right now, the number of assigned processes must be greater than the number of active tasks.
+For the DRA, I use:
+```
+ for seed in `seq 2 21`; do sbatch $TPG/scripts/run/tpg-run-slurm.sh -s $seed -p $TPG/configs/5_ant_dynamic_1_fitness_tot-reg.yaml; done
+```
+
+
+### Validation / Test cadence (every N generations)
+
+TPG supports three evaluation phases: **train**, **validation**, and **test**.
+
+- **How many episodes per phase** is controlled by task parameters (e.g. for MuJoCo: `mj_n_eval_train`, `mj_n_eval_validation`, `mj_n_eval_test`).
+- **How often validation/test runs during training** is controlled by GA parameters:
+  - `validation_mod`: run validation every N generations (set to `0` to disable)
+  - `test_mod`: run the (validation + test) procedure every N generations (set to `0` to disable)
+
+If you want **validation every 50 generations** without running test, set:
+
+```
+validation_mod: 50
+test_mod: 0
+mj_n_eval_validation: <nonzero>
+```
 
 ### 5. Plot results
 
 Generate classic_control_p0.pdf with various statistics:
 
 ```
-tpg-plot-stats.sh
+tpg-plot-evolve.py all-selection all
 ```
 
 The first page will be a training curve looking something like the plot below. A fitness of ~1000 indicates the agent balances the pole for 1000 timesteps, thus solving the task.
 
 <img src="./images/MuJoco_Inverted_Pendulum_Fitness.png" height="300" />
 
-### 6. Visualize the best policy's behaviour
+### 6. Visualize the best policy's behaviour for chemotaxis
 
-Display an OpenGL animation of the single best policy interacting with the environment:
+Turn the option for saving a video on through:
+```
+gradient_save_video: 1
+```
 
 ```
-tpg replay inverted_pendulum
+tpg replay 1_gradient_baldwin
 ```
 
 ### 7. Cleanup

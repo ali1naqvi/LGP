@@ -9,10 +9,10 @@
 #include <random>
 #include <yaml-cpp/yaml.h>
 
+#include "MemoryEigen.h"
 #include "RegisterMachine.h"
 #include "api_client.h"
 #include "instruction.h"
-#include "MemoryEigen.h"
 #include "point.h"
 #include "state.h"
 #include "team.h"
@@ -24,10 +24,10 @@
 #define AUX_SEED 1
 
 class TPG {
-   public:
-    TPG();
-    TPG(const TPG &);
-    ~TPG();
+  public:
+   TPG();
+   TPG(const TPG&);
+   ~TPG();
 
     void AddProgram(RegisterMachine *p);
     void AddTeam(team *tm);
@@ -37,8 +37,15 @@ class TPG {
     bool haveEliteTeam(string taskset, int fitMode, int phase);
     void Seed(size_t i, uint_fast32_t s);
     void InitExperimentTracking(APIClient *apiClient);
+    void ExtinctionEvent();
 
-    /***************************************************************************
+    /* Map Elites*/
+    void InitMapElitesArchive();
+    void UpdateMapElitesArchive();
+    void SaveMapElitesArchive();
+    const std::vector<team*>& GetMapElitesArchive() const;
+
+   /***************************************************************************
      * Methods to implement the TPG algorithm.
      **************************************************************************/
     string AgentOpUseToString(team* agent);
@@ -49,8 +56,11 @@ class TPG {
     void finalize();
     void genSampleSets(size_t);
     team* TeamSelector_Tournament(vector<team*> &candidate_parent_teams);
+    void ComputeParetoFronts(vector<team*>& teams);  // NSGA-II non-dominated sorting
     void GenerateNewTeams();
     void TeamMutator_ProgramOrder(team *team_to_mu);
+    void TeamMutator_LambdaVariation(team *team_to_mu);
+    void TeamMutator_DecayVariation(team *team_to_mu);
     void TeamMutator_AddPrograms(team *team_to_mu);
     void TeamMutator_RemovePrograms(team *team_to_mu);
     team *CloneTeam(team *team_to_clone);
@@ -61,11 +71,16 @@ class TPG {
                                       int &n_new_teams);
     void AddAncestorToPhylogeny(team *parent, team *new_team);
     void AddTeamToPhylogeny(team *new_team);
+    // void InsertTeamLambdaToCSV(team* new_team);
     void ApplyVariationOps(team *team_to_modify, int &n_new_teams);
     team *genTeamsInternal(long, mt19937 &, set<team *, teamIdComp> &,
                            map<long, team *> &);
     int genUniqueProgram(RegisterMachine *, set<RegisterMachine *, RegisterMachineIdComp>);
-    void GetAction(EvalData& eval_data);
+    void GetAction(EvalData& eval_data, std::mt19937& rng, std::unordered_map<std::string, std::any>& params, std::tuple<long, double, double>& prev_prog_history);
+    void LogReplaySelfModifyingRates(const EvalData& eval_data);
+    //TD ERROR
+    void ComputeIndReward(EvalData& eval_data, std::unordered_map<string, std::any> &params, double reward_per_step);
+
     void GetAllNodes(team *tm, set<team *, teamIdComp> &teams,
                      set<RegisterMachine *, RegisterMachineIdComp> &RegisterMachines);
     // void GetAllNodes(team *tm, set<team *, teamIdComp> &teams,
@@ -98,6 +113,12 @@ class TPG {
                               set<team *, teamIdComp> &visitedTeamsAllTasks,
                               vector<map<long, double>> &teamUseMapPerTask,
                               vector<int> &steps_per_task);
+    
+    void printGraphDotMujoco(long rootTeamID,
+                              set<team *> &visitedTeamsAllTasks);
+                              
+    void printGraphDotMujocoVisited(long rootTeamID,
+                              set<team *> &visitedTeamsAllTasks);
     // void printGraphDotGPEMAnimate(long rootTeamId, size_t frame, int episode,
     //                               int step, size_t depth,
     //                               vector<RegisterMachine *> allPrograms,
@@ -114,12 +135,15 @@ class TPG {
     void printOss(ostringstream &o);
     void printTeamInfo(long, int, bool, bool, long teamId = -1);
     void trackTeamInfo(long, int, bool, long teamId = -1);
-    
+    static double ComputeTeamFLOPs(const team* t);
     void RegisterMachineCrossover(RegisterMachine *p1, RegisterMachine *p2,
                           RegisterMachine **c1, RegisterMachine **c2);
 
 
     void ReadCheckpoint(long, int, bool, const string &);
+    
+    void LinearCrossover(RegisterMachine* gp1, RegisterMachine* gp2,
+                         RegisterMachine** c1, RegisterMachine** c2);
 
     void ReadParameters(string file_name,
                         std::unordered_map<string, std::any> &params);
@@ -131,6 +155,9 @@ class TPG {
     team *TeamCrossover(team* parent1, team* parent2);
     void UpdateTeamPhyloData(team *tm);
     void FindSingleTaskFitnessRange(vector<TaskEnv *> &tasks,
+                                    vector<vector<double>> &mins,
+                                    vector<vector<double>> &maxs);
+    void FindSingleTaskMinMax(vector<TaskEnv *> &tasks,
                                     vector<vector<double>> &mins,
                                     vector<vector<double>> &maxs);
     vector<team *> NormalizeScoresAndRankTeams(
@@ -151,10 +178,11 @@ class TPG {
     void WriteCheckpoint(bool);
     std::string WriteMPICheckpoint(vector<team *> &);
 
-    /*****************************************************************************
+   /*****************************************************************************
      *  TPG member variables and data structures.
      ****************************************************************************/
     //  Populations
+    std::tuple<long, double, double> prev_prog_history_ = std::make_tuple(-1, 1, 1); //id, bid, learning_rate
     set<team *, teamIdComp> team_pop_;      // Teams
     // Map team id -> team* for RegisterMachine graph traversal
     map<long, team *> team_map_;
@@ -164,6 +192,9 @@ class TPG {
     vector<vector<long>> _Memids;
     // one map for each memory type: id->memory*
     vector<map<long, MemoryEigen *>> _Memory;
+
+    /* Archive of best teams */
+    std::vector<team*> map_elites_archive_;
 
     // Phylogeny data
     map<long, phyloRecord> phylo_graph_;
@@ -209,6 +240,8 @@ class TPG {
     // Method used by TPG processes to share evaluation data.
     void EncodeEvalResultString(EvalData& eval_data);
     void DecodeEvalResultString(std::string& s);
+    void AppendSelfModifyingRates(std::string& result,
+                                  std::vector<team*>& teams);
     void FinalizeStepData(EvalData& eval_data);  
     EvalData InitEvalData();
 };

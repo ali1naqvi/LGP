@@ -22,3 +22,5 @@ if ls vg.* 1> /dev/null 2>&1; then rm vg.*; fi
 if ls replay/frames/*.tga 1> /dev/null 2>&1; then rm replay/frames/*.tga; fi
 if ls replay/graphs/*.dot 1> /dev/null 2>&1; then rm replay/graphs/*.dot; fi
 if ls *.csv 1> /dev/null 2>&1; then rm *.csv; fi
+if ls debug_logs_* 1> /dev/null 2>&1; then rm -r debug_logs_*; fi
+if ls sanitizer_logs_* 1> /dev/null 2>&1; then rm -r sanitizer_logs_*; fi

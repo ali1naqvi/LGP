@@ -7,10 +7,13 @@
 #include <set>
 #include <unordered_set>
 
+#include "RegisterMachine.h"
 #include "misc.h"
 #include "point.h"
 #include "state.h"
-#include "RegisterMachine.h"
+#include "hebbian.h"
+// #include "RegisterMachine.h"
+// #include "sharedMemoryEigen.h"
 
 
 #define MEMBERS_RUN_ENTROPY_INDEX 3
@@ -25,6 +28,8 @@ struct teamIdComp;
 
 class team {
  public:
+  ProgramWeights HebbianMap;
+  std::tuple<int, double, double> WrapVectorBidProbability(std::vector<RegisterMachine*>& programs, std::mt19937& rng, const bool homeostatic_root, const bool post_connection, const bool probabilistic_bid, const std::string& homeostatic_TD);
   inline void addAncestorId(long aid) { ancestorIds_.push_back(aid); }
   inline void addEvalSeed(int s) { evalSeeds_.push_back(s); }
   inline void clearEvalSeeds() { evalSeeds_.clear(); }
@@ -168,57 +173,88 @@ class team {
     members_.splice(leiter_destination, members_, leiter_source);
   }
 
-  void updateComplexityRecord(map<long, team *> &, int);
-  void updateComplexityRecord(map<long, team *> &, int, int, long, int);
+   double AvgScalarRegsPerProgram() const {
+   if (members_.empty()) return 0.0;
+   double sum = 0.0;
+   for (auto* p : members_) {
+      if (p) sum += static_cast<double>(p->n_memories_);
+   }
+   return sum / static_cast<double>(members_.size());
+   }
 
-  string taskCode() const { return task_code_; }
-  void taskCode(string tc) { task_code_ = tc; }
-
-  // this constructor used for initialization and checkpointing
-  team(long gtime, long id) {
-    cloneId_ = -1;
-    clones_ = 0;
-    //_depthSum = 0;
-    for (int i = 0; i < _NUM_PHASE; i++) elite_.push_back(false);
-    //_visitedCount = 0;
-    domBy_ = -1;
-    domOf_ = -1;
-    fit_ = 0.0;
-    gtime_ = gtime;
-    id_ = id;
-    key_ = 0;
-    lastCompareFactor_ = -1;
-    n_atomic_ = 0;
-    _n_eval = 0;
-    numLinearM_ = 0;
-    root_ = true;
-    runTimeComplexityIns_ = 0;
-    runTimeComplexityTms_ = 0;
-  };
-
-  ~team() {  // TODO(skelly) clean outcome data structure
-    for (auto ouiter1 = outcomes_.begin(); ouiter1 != outcomes_.end();
-         ouiter1++) {
-      for (auto ouiter2 = ouiter1->second.begin();
-           ouiter2 != ouiter1->second.end(); ouiter2++) {
-        for (auto ouiter3 = ouiter2->second.begin();
-             ouiter3 != ouiter2->second.end();) {
-          delete ouiter3->second;
-          ouiter2->second.erase(ouiter3++);
-        }
+   int TotalEffectiveScalarRegisters() const {
+      int sum = 0;
+      for (auto* p : members_) {
+         if (p) sum += p->n_effective_registers_;
       }
-    }
-  }
+      return sum;
+   }
 
-  inline void addDistance(int type, double d) {
-    if (type == 0)
-      distances_0_.insert(d);
-    else if (type == 1)
-      distances_1_.insert(d);
-    else if (type == 2)
-      distances_2_.insert(d);
-  }
-  void AddProgram(RegisterMachine *, int position = -1);
+   int TotalScalarRegisters() const {
+      int sum = 0;
+      for (auto* p : members_) {
+         if (p) sum += p->n_memories_;
+      }
+      return sum;
+   }
+
+   void updateComplexityRecord(map<long, team*>&, int);
+   void updateComplexityRecord(map<long, team*>&, int, int, long, int);
+
+   string taskCode() const { return task_code_; }
+   void taskCode(string tc) { task_code_ = tc; }
+
+   // this constructor used for initialization and checkpointing
+   team(long gtime, long id, int team_obs_index, double lambda_td, double decay_factor): HebbianMap("ojas") {
+      cloneId_ = -1;
+      
+      clones_ = 0;
+      obs_index_ = team_obs_index;
+      lambda_td_ = lambda_td;
+      decay_factor_ = decay_factor;
+      //_depthSum = 0;
+      for (int i = 0; i < _NUM_PHASE; i++)
+         elite_.push_back(false);
+      //_visitedCount = 0;
+      domBy_ = -1;
+      domOf_ = -1;
+      fit_ = 0.0;
+      gtime_ = gtime;
+      id_ = id;
+      key_ = 0;
+      lastCompareFactor_ = -1;
+      n_atomic_ = 0;
+      _n_eval = 0;
+      numLinearM_ = 0;
+      root_ = true;
+      runTimeComplexityIns_ = 0;
+      runTimeComplexityTms_ = 0;
+      //team_memory_ = sharedMemoryEigen();
+   };
+
+   ~team() {  // TODO(skelly) clean outcome data structure
+      for (auto ouiter1 = outcomes_.begin(); ouiter1 != outcomes_.end();
+           ouiter1++) {
+         for (auto ouiter2 = ouiter1->second.begin();
+              ouiter2 != ouiter1->second.end(); ouiter2++) {
+            for (auto ouiter3 = ouiter2->second.begin();
+                 ouiter3 != ouiter2->second.end();) {
+               delete ouiter3->second;
+               ouiter2->second.erase(ouiter3++);
+            }
+         }
+      }
+   }
+
+   inline void addDistance(int type, double d) {
+      if (type == 0)
+         distances_0_.insert(d);
+      else if (type == 1)
+         distances_1_.insert(d);
+      else if (type == 2)
+         distances_2_.insert(d);
+   }
+   void AddProgram(RegisterMachine *, int position = -1);
   // bool AddProgramActive(RegisterMachine *);
   string ToString() const;
   void clone(map<long, phyloRecord> &, team **);
@@ -227,122 +263,133 @@ class team {
     distances_1_.clear();
     distances_2_.clear();
   }
-  // void deleteOutcome(point *); /* Delete outcome. */
-  void GetAction(EvalData& eval_data);
-  // double ncdBehaviouralDistance(team*, int);
-  void Shuffle(mt19937 &rng) {
+
+   // void deleteOutcome(point *); /* Delete outcome. */
+  void GetAction(EvalData& eval_data, std::mt19937& rng, std::unordered_map<std::string, std::any>&, std::tuple<long, double, double>&);
+   // double ncdBehaviouralDistance(team*, int);
+   void Shuffle(mt19937 &rng) {
     vector<RegisterMachine *> vec(members_.begin(), members_.end());
     shuffle(vec.begin(), vec.end(), rng);
     list<RegisterMachine *> shuffled_list{vec.begin(), vec.end()};
     members_.swap(shuffled_list);
   }
-  void updateActiveMembersFromIds(vector<long> &);
+   void updateActiveMembersFromIds(vector<long> &);
 
-  // protected:
-  vector<long> ancestorIds_;
-  long cloneId_;
-  long clones_;
-  vector<bool> elite_;
-  multiset<double> distances_0_;
-  multiset<double> distances_1_;
-  multiset<double> distances_2_;
-  int domBy_; /* Number of other teams dominating this team. */
-  int domOf_; /* Number of other teams that this team dominates. */
-  vector<int> evalSeeds_;
-  // map of t -> task# keeps track of which fitness bin this
-  // team was protected by in each gen (-1 for multi-task)
-  map<long, string> fitnessBins_;
-  double fit_; /* Fitness value used for selection */
-  double fitProb_;
-  long gtime_; /* Time step at which generated. */
-  long id_;    /* Unique id of team. */
-  set<long> incomingPrograms_;
-  double key_; /* For sorting. */
-  int lastCompareFactor_;
-  std::list<RegisterMachine *> members_;   // team members for fast variation
-  vector<RegisterMachine *> members_run_;  // team members for fast direct access
-  int n_atomic_;
-  int _n_eval;
-  int numLinearM_;
-  int numActiveTeams_;
-  int numActivePrograms_;
-  int numEffectiveInstructions_;
-  int numActiveFeatures_;
-  // TODO(skelly): simplify this data structure
-  // Maps point[task][phase][envSeed] -> outcome
-  map<int, map<int, map<int, point *>>> outcomes_;
+   // protected:
+   int obs_index_;
+   double lambda_td_;
+   double decay_factor_;
+   double team_plasticity_;
+   vector<long> ancestorIds_;
+   long cloneId_;
+   long clones_;
+   vector<bool> elite_;
+   multiset<double> distances_0_;
+   multiset<double> distances_1_;
+   multiset<double> distances_2_;
+   int domBy_; /* Number of other teams dominating this team. */
+   int domOf_; /* Number of other teams that this team dominates. */
+   vector<int> evalSeeds_;
+   // map of t -> task# keeps track of which fitness bin this
+   // team was protected by in each gen (-1 for multi-task)
+   map<long, string> fitnessBins_;
+   double fit_; /* Fitness value used for selection */
+   double fitProb_;
+   long gtime_; /* Time step at which generated. */
+   long id_;    /* Unique id of team. */
+   set<long> incomingPrograms_;
+   double key_; /* For sorting. */
+   int lastCompareFactor_;
+   std::list<RegisterMachine*> members_;  // team members for fast variation
+   vector<RegisterMachine*>
+       members_run_;  // team members for fast direct access
+   int n_atomic_;
+   int _n_eval;
+   int numLinearM_;
+   int numActiveTeams_;
+   int numActivePrograms_;
+   int numEffectiveInstructions_;
+   int numActiveFeatures_;
+   // TODO(skelly): simplify this data structure
+   // Maps point[task][phase][envSeed] -> outcome
+   map<int, map<int, map<int, point*>>> outcomes_;
 
-  set<long> policyFeatures_;
-  set<long> policyFeaturesActive_;
-  set<long> policyRootIds_;
-  map<int, map<int, map<int, double>>> quickMeans_;
-  map<int, map<int, map<int, double>>> quickSums_;
-  bool root_;
-  double runTimeComplexityIns_;
-  double runTimeComplexityTms_;
-  string task_code_;
+   set<long> policyFeatures_;
+   set<long> policyFeaturesActive_;
+   set<long> policyRootIds_;
+   map<int, map<int, map<int, double>>> quickMeans_;
+   map<int, map<int, map<int, double>>> quickSums_;
+   bool root_;
+   double runTimeComplexityIns_;
+   double runTimeComplexityTms_;
+   string task_code_;
+   int pareto_rank_ = 0;
+   double crowding_distance_ = 0.0;
+   //sharedMemoryEigen team_memory_;  // Private shared memory for the programs in this team
 };
 
 struct teamIdComp {
-  bool operator()(team *t1, team *t2) const { return t1->id_ > t2->id_; }
+   bool operator()(team* t1, team* t2) const { return t1->id_ > t2->id_; }
 };
 
 struct teamFitnessCompare {
-  bool operator()(team *t1, team *t2) const {
-    // double d1, d2;
-    if (!isEqual(t1->fit_, t2->fit_)) {
-      return t1->fit_ > t2->fit_;
-    } else {
-      return t1->id_ > t2->id_;
-    }
-  }
+   bool operator()(team* t1, team* t2) const {
+      // double d1, d2;
+      if (!isEqual(t1->fit_, t2->fit_)) {
+         return t1->fit_ > t2->fit_;
+      } else {
+         return t1->id_ > t2->id_;
+      }
+   }
 };
 
 struct teamFitnessLexicalCompare {
-  bool operator()(team *t1, team *t2) const {
-    // double d1, d2;
-    if (!isEqual(t1->fit_, t2->fit_)) {
-      t1->lastCompareFactor_ = 1;
-      t2->lastCompareFactor_ = 1;
-      return t1->fit_ > t2->fit_;
-    } else {
-      t1->lastCompareFactor_ = 7;
-      t2->lastCompareFactor_ = 7;
+   bool operator()(team* t1, team* t2) const {
+      // double d1, d2;
+      if (!isEqual(t1->fit_, t2->fit_)) {
+         t1->lastCompareFactor_ = 1;
+         t2->lastCompareFactor_ = 1;
+         return t1->fit_ > t2->fit_;
+      } else {
+         t1->lastCompareFactor_ = 7;
+         t2->lastCompareFactor_ = 7;
 
-      // TODO(skelly): potential dramatic effect on neutrality & evolution!
-      // return t1->id_ > t2->id_;    // Younger is better
-      return t1->id_ < t2->id_;  // Older is better
-    }
-  }
+         // TODO(skelly): potential dramatic effect on neutrality & evolution!
+         //TODO(ALI): reversed it to be younger being kept
+         return t1->id_ > t2->id_;    // Younger is better
+         // return t1->id_ < t2->id_;  // Older is better
+      }
+   }
 };
 
 struct teamFitComplexLexCompare {
-  bool operator()(team *t1, team *t2) const {
-    if (!isEqual(t1->fit_, t2->fit_)) {
-      t1->lastCompareFactor_ = 1;
-      t2->lastCompareFactor_ = 1;
-      return t1->fit_ > t2->fit_;
-    } else {
-      auto t1_val = t1->runTimeComplexityIns_;
-      auto t2_val = t2->runTimeComplexityIns_;
-      // auto t1_val = t1->runTimeComplexityTms_;
-      // auto t2_val = t2->runTimeComplexityTms_;
-      if (!isnan(t1_val) && !isnan(t2_val) && !isEqual(t1_val, t2_val)) {
-        // cerr <<"teamFitComplexLexCompare 0:" << t1->fit_ << " " << t2->fit_
-        // <<
-        // endl;
-        return t1_val < t2_val;
+   bool operator()(team* t1, team* t2) const {
+      if (!isEqual(t1->fit_, t2->fit_)) {
+         t1->lastCompareFactor_ = 1;
+         t2->lastCompareFactor_ = 1;
+         return t1->fit_ > t2->fit_;
       } else {
-        // cerr <<"teamFitComplexLexCompare 2:" << t1->id_ << " " << t2->id_ <<
-        // endl;
-        return t1->id_ > t2->id_;
+         auto t1_val = t1->runTimeComplexityIns_;
+         auto t2_val = t2->runTimeComplexityIns_;
+         // auto t1_val = t1->runTimeComplexityTms_;
+         // auto t2_val = t2->runTimeComplexityTms_;
+         if (!isnan(t1_val) && !isnan(t2_val) && !isEqual(t1_val, t2_val)) {
+            // cerr <<"teamFitComplexLexCompare 0:" << t1->fit_ << " " <<
+            // t2->fit_
+            // <<
+            // endl;
+            return t1_val < t2_val;
+         } else {
+            // cerr <<"teamFitComplexLexCompare 2:" << t1->id_ << " " << t2->id_
+            // << endl;
+            return t1->id_ > t2->id_;
+         }
       }
-    }
-  }
+   }
 };
 
 struct teamInDegCompare {
-  bool operator()(team *t1, team *t2) { return t1->inDeg() < t2->inDeg(); }
+   bool operator()(team* t1, team* t2) { return t1->inDeg() < t2->inDeg(); }
 };
 
 #endif

@@ -2,11 +2,14 @@
 #define MemoryEigen_h
 
 #include <Eigen/Dense>
+#include <algorithm>
 #include <deque>
+#include <iostream>
 #include <random>
 #include <sstream>
 #include <string>
-#include <iostream>
+#include <vector>
+#include <misc.h>
 
 typedef Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> MatrixDynamic;
 
@@ -121,10 +124,16 @@ class MemoryEigen {
    // When modifying a real-valued constant, we multiply it by a
    // uniform random number in [0.5, 2.0] and flip its sign with
    // 10% probability
-   inline void MutateConstants(std::mt19937 &rng) {
+   inline void MutateConstants(
+       std::mt19937 &rng,
+       const std::vector<size_t>& skip_slots = {}) {
       auto dis1 = std::uniform_real_distribution<double>(0.5, 2.0);
       auto dis2 = std::uniform_real_distribution<double>(0.0, 1.0);
       for (size_t i = 0; i < const_memory_.size(); i++) {
+         if (std::find(skip_slots.begin(), skip_slots.end(), i) !=
+             skip_slots.end()) {
+            continue;
+         }
          for (auto &x : const_memory_[i].reshaped()) {
             x *= dis1(rng);
             if (dis2(rng) <= 0.1) {
@@ -157,6 +166,16 @@ class MemoryEigen {
 
    inline void RandomizeConst() {
       for (auto &m : const_memory_) m.setRandom();
+   }
+
+   // Deterministic version using seeded RNG
+   inline void RandomizeConst(std::mt19937& rng) {
+      std::uniform_real_distribution<double> dist(-1.0, 1.0);
+      for (auto &m : const_memory_) {
+         for (int i = 0; i < m.size(); ++i) {
+            m.data()[i] = dist(rng);
+         }
+      }
    }
 
    void ResizeMemory() {

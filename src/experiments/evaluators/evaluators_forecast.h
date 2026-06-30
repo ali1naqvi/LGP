@@ -47,7 +47,9 @@ inline void EvalRecursiveForecast(TPG &tpg, EvalData &eval) {
     for (int i = 0; i < task->n_prime_ - 1; i++) {
         PrepareRecursiveForecastObs(tpg, eval, true);
         // Execute graph
-        tpg.GetAction(eval);
+        tpg.GetAction(
+          eval, tpg.rngs_[AUX_SEED],
+          tpg.params_, tpg.prev_prog_history_);
         eval.sample++;
     }
     // Predict
@@ -56,7 +58,9 @@ inline void EvalRecursiveForecast(TPG &tpg, EvalData &eval) {
          eval.n_prediction++) {
         PrepareRecursiveForecastObs(tpg, eval, false);
         // Execute graph
-        tpg.GetAction(eval);
+        tpg.GetAction(
+          eval, tpg.rngs_[AUX_SEED],
+          tpg.params_, tpg.prev_prog_history_);
         SaveRecursiveForecast(tpg, eval);
         eval.sample++;
         eval.AccumulateStepData();
@@ -117,7 +121,9 @@ inline void EvalRecursiveForecastViz(TPG &tpg, EvalData &eval,
                                       task->data[eval.sample].begin(),
                                       task->data[eval.sample].end());
         // Execute graph
-        tpg.GetAction(eval);
+        tpg.GetAction(
+          eval, tpg.rngs_[AUX_SEED],
+          tpg.params_, tpg.prev_prog_history_);
         // Team user per task stats TODO(skelly): move to accumulator?
         for (auto tm : eval.teams_visited) {
             if (teamUseMapPerTask[tpg.state_["active_task"]].find(tm->id_) ==
@@ -141,7 +147,9 @@ inline void EvalRecursiveForecastViz(TPG &tpg, EvalData &eval,
         PrepareRecursiveForecastObs(tpg, eval, false);
 
         // Execute graph
-        tpg.GetAction(eval);
+        tpg.GetAction(
+          eval, tpg.rngs_[AUX_SEED],
+          tpg.params_, tpg.prev_prog_history_);
         // Team user per task stats TODO(skelly): move to accumulator?
         for (auto tm : eval.teams_visited) {
             if (teamUseMapPerTask[tpg.state_["active_task"]].find(tm->id_) ==

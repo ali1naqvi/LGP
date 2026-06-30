@@ -9,4 +9,6 @@ void EvalData::AccumulateStepData() {
     n_prediction++;
     stats_double[VISITED_TEAMS_IDX] += team_path.size();
     stats_double[INSTRUCTIONS_IDX] += instruction_count;
+
+    timestep++;
 }

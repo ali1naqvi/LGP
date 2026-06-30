@@ -19,6 +19,7 @@ class Mujoco_Reacher_v4 : public MujocoEnv {
       n_eval_validation_ = std::any_cast<int>(params["mj_n_eval_validation"]);
       n_eval_test_ = std::any_cast<int>(params["mj_n_eval_test"]);
       max_step_ = std::any_cast<int>(params["mj_max_timestep"]);
+      max_sim_steps_ = max_step_ * frame_skip_;
       reward_control_weight_ =
           std::any_cast<double>(params["mj_reward_control_weight"]);
 
@@ -62,7 +63,7 @@ class Mujoco_Reacher_v4 : public MujocoEnv {
               d_->xpos[id_fingertip_ * 3 + 1] - d_->xpos[id_target_ * 3 + 1]};
    }
 
-   bool terminal() { return step_ >= max_step_; }
+   bool terminal() { return time_limit_reached(); }
 
    Results sim_step(std::vector<double>& action) {
       auto dist_diff = get_dist();
@@ -102,7 +103,7 @@ class Mujoco_Reacher_v4 : public MujocoEnv {
       std::copy_n(dist_diff.begin(), 2, obs.begin() + 6 + m_->nq - 2);
    }
 
-   void reset(mt19937& rng) {
+   void reset(mt19937& rng, int& episode_number) {
 
       std::uniform_real_distribution<> dis_pos(-0.1, 0.1);
       std::vector<double> qpos(m_->nq);
@@ -132,6 +133,7 @@ class Mujoco_Reacher_v4 : public MujocoEnv {
       mj_resetData(m_, d_);
       set_state(qpos, qvel);
       step_ = 0;
+      sim_steps_elapsed_ = 0;
       get_obs(state_);
    }
 };

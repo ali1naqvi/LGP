@@ -6,7 +6,16 @@
 #include "metrics/replacement/replacement_metrics_builder.h"
 #include "metrics/removal/removal_metrics_builder.h"
 #include "metrics/removal/removal_metrics.h"
+
 #include "EvalData.h"
+#include <algorithm>
+#include <queue>   // for breadth‑first traversal of team pointers
+#include <filesystem>
+#include <cmath>
+#include <fstream>
+#include <sstream>
+#include <limits>
+#include <cstdlib>   // for std::system
 
 /******************************************************************************/
 TPG::TPG() {
@@ -91,11 +100,42 @@ void TPG::clearMemory() {
    }
 }
 
-void TPG::GetAction(EvalData& eval_data){
+void TPG::GetAction(EvalData& eval_data, std::mt19937& rng, std::unordered_map<std::string, std::any>& params, std::tuple<long, double, double>& prev_prog_history){
   eval_data.instruction_count = 0;
   eval_data.team_path.clear();
-  eval_data.tm->GetAction(eval_data);
+  eval_data.tm->GetAction(eval_data, rng, params, prev_prog_history);
 }
+
+
+
+void TPG::ComputeIndReward(EvalData& eval_data,
+                           std::unordered_map<std::string, std::any>& params,
+                           double reward_per_step)
+{
+    auto& H = eval_data.tm->HebbianMap;
+    double& V   = eval_data.running_mean;  
+    // const double gamma = H.gamma;    
+    double alpha = 0.02;            
+
+    // double delta = reward_per_step - (1.0 - gamma) * V;
+    double delta = reward_per_step - V; // https://dl.acm.org/doi/pdf/10.5555/2074022.2074088
+
+   //  Debug print before update
+   //  std::cerr << "[ComputeIndReward] reward=" << reward_per_step 
+   //            << " V(before)=" << V 
+   //            << " gamma=" << gamma 
+   //            << " delta=" << delta << std::endl;
+
+    V += alpha * delta;               // critic update
+
+   //  // Debug print after update
+   //  std::cerr << "[ComputeIndReward] V(after)=" << V << std::endl;
+
+    H.pred_error = delta;             // feed to actor/plasticity (which uses λ)
+    eval_data.pred_error = delta;
+    
+}
+
 
 /******************************************************************************/
 void TPG::GetAllNodes(team* tm, set<team*, teamIdComp>& teams,
@@ -158,7 +198,7 @@ bool TPG::isElitePS(team* tm, int phase) {
 void TPG::MarkEffectiveCode() {
    for (auto prog : program_pop_) {
       prog.second->stateful_ = GetParam<int>("stateful");
-      prog.second->MarkIntrons(params_);
+      prog.second->MarkIntrons(params_, prog.second->n_memories_);
    }
 }
 
@@ -227,6 +267,185 @@ void TPG::setOutcome(team* tm, string behav, vector<double>& rewards,
 }
 
 /******************************************************************************/
+void TPG::InitMapElitesArchive() {
+    map_elites_archive_.assign(GetParam<int>("n_root"), nullptr);
+}
+
+/******************************************************************************/
+void TPG::UpdateMapElitesArchive()
+{
+    if (map_elites_archive_.empty() ||
+        map_elites_archive_.size() != static_cast<size_t>(GetParam<int>("n_root")))
+    {
+        InitMapElitesArchive();
+    }
+    const size_t bins = map_elites_archive_.size();
+    const size_t grid_cols = static_cast<size_t>(std::ceil(std::sqrt(bins)));
+    const size_t grid_rows = (bins + grid_cols - 1) / grid_cols;
+    const std::string param_mode = GetParam<std::string>("map_elites_param");
+
+    std::vector<long>   best_ids(bins, -1);
+    std::vector<double> best_fits(bins, -std::numeric_limits<double>::infinity());
+    std::vector<double> best_lambda(bins, 0.0);
+    std::vector<double> best_decay(bins, 0.0);
+    std::vector<team*>  reps(bins, nullptr);
+    std::vector<double> best_plast(bins, 0.0);
+
+    std::filesystem::create_directories("logs/map_elites");
+    const std::string filename =
+        std::string("logs/map_elites/map_elites_archive_") + std::to_string(seeds_[TPG_SEED]) + ".csv";
+
+    if (std::filesystem::exists(filename)){
+        std::ifstream ifs(filename);
+        std::string line;
+        while (std::getline(ifs, line))
+        {
+            std::stringstream ss(line);
+            std::string token;
+
+            size_t bin_idx = 0;
+            long   id      = -1;
+            double fit     = -std::numeric_limits<double>::infinity();
+            double lambda_val = 0.0;
+            double decay_val  = 0.0;
+            double plast_val  = 0.0;
+
+            ss >> token;           // "bin"
+            ss >> bin_idx;         // bin number
+            bin_idx--;             // 0‑index
+            while (ss >> token) {
+                if (token == "id:" || token == "id")
+                    ss >> id;
+                else if (token == "fit:" || token == "fit")
+                    ss >> fit;
+                else if (token == "λ:" || token == "λ")
+                    ss >> lambda_val;
+                else if (token == "decay:" || token == "decay")
+                    ss >> decay_val;
+                else if (token == "plast:" || token == "plast")
+                    ss >> plast_val;
+            }
+
+            if (bin_idx < bins) {
+                best_ids[bin_idx]    = id;
+                best_fits[bin_idx]   = fit;
+                best_lambda[bin_idx] = lambda_val;
+                best_decay[bin_idx]  = decay_val;
+                best_plast[bin_idx] = plast_val;
+
+                if (team_map_.count(id)) {
+                  reps[bin_idx] = team_map_.at(id);
+                    if (reps[bin_idx] && !reps[bin_idx]->elite(GetState("phase"))) {
+                        reps[bin_idx]->elite(GetState("phase"), true);
+                    }
+                }
+            }
+        }
+        ifs.close();
+    }
+
+    for (auto tm : GetRootTeamsInVec())
+    {
+        if (param_mode == "plasticity")
+        {
+            double plast = clamp(tm->team_plasticity_, 0.0, 1.0);
+            size_t idx   = std::min(static_cast<size_t>(std::floor(plast * bins)),
+                                    bins - 1);
+
+            if (tm->fit_ > best_fits[idx]) {
+                best_ids[idx]   = tm->id_;
+                best_fits[idx]  = tm->fit_;
+                best_plast[idx] = plast;
+                reps[idx]       = tm;
+                best_lambda[idx] = tm->lambda_td_;
+                best_decay[idx]  = tm->decay_factor_;
+                if (tm && !tm->elite(GetState("phase")))
+                    tm->elite(GetState("phase"), true);
+            }
+            continue;   // next team
+        }
+        
+        double lam = tm->lambda_td_;
+        double dec = tm->decay_factor_;
+
+        size_t lam_idx = std::min(static_cast<size_t>(std::floor(lam * grid_cols)), grid_cols - 1);
+        size_t dec_idx = std::min(static_cast<size_t>(std::floor(dec * grid_rows)), grid_rows - 1);
+        size_t idx     = lam_idx * grid_cols + dec_idx; 
+
+        if (idx < bins && tm->fit_ > best_fits[idx]) {
+            best_ids[idx]    = tm->id_;
+            best_fits[idx]   = tm->fit_;
+            best_lambda[idx] = lam;
+            best_decay[idx]  = dec;
+            best_plast[idx]   = clamp(tm->team_plasticity_, 0.0, 1.0);
+            reps[idx]  = tm;
+            if (tm && !tm->elite(GetState("phase")))
+                tm->elite(GetState("phase"), true);
+        }
+    }
+
+    std::ofstream ofs(filename, std::ios::out | std::ios::trunc);
+    if (ofs)
+    {
+        for (size_t idx = 0; idx < bins; ++idx)
+        {
+            ofs << "bin " << (idx + 1) << ": ";
+            if (best_ids[idx] != -1) {
+                ofs << "id: "   << best_ids[idx]
+                    << " fit: "  << best_fits[idx]
+                    << " λ: "    << best_lambda[idx]
+                    << " decay: " << best_decay[idx]
+                    << " plast: " << best_plast[idx];
+            }
+            ofs << '\n';
+        }
+        ofs.close();
+    }
+    map_elites_archive_ = std::move(reps);
+}
+
+/******************************************************************************/
+void TPG::SaveMapElitesArchive() {
+    std::filesystem::create_directories("logs");
+
+    bool save_gen = GetParam<int>("save_me_generationally") == 1;
+   
+   std::string filename = std::string("logs/map_elites/map_elites_archive_");
+   if (save_gen) {
+      filename = filename + std::to_string(seeds_[TPG_SEED]) +
+         "_t" + std::to_string(GetState("t_current")) + ".csv";
+   } else {
+      filename = filename + std::to_string(seeds_[TPG_SEED]) + ".csv";
+   }
+    
+    const size_t bins = map_elites_archive_.size();
+    const std::string param_mode = GetParam<std::string>("map_elites_param");
+    std::ofstream ofs(filename, std::ios::out | std::ios::trunc);
+    if (!ofs) {
+        return;
+    }
+
+    for (size_t idx = 0; idx < bins; ++idx) {
+        ofs << "bin " << (idx + 1) << ": ";
+        if (map_elites_archive_[idx] != nullptr) {
+            team* rep = map_elites_archive_[idx];
+            ofs << "id: "   << rep->id_
+                << " fit: "  << rep->fit_
+                << " λ: "    << rep->lambda_td_
+                << " decay: " << rep->decay_factor_
+                << " plast: " << clamp(rep->team_plasticity_,0.0, 1.0);
+        }
+        ofs << '\n';
+    }
+    ofs.close();
+}
+
+/******************************************************************************/
+const std::vector<team*>& TPG::GetMapElitesArchive() const {
+    return map_elites_archive_;
+}
+
+/******************************************************************************/
 void TPG::finalize() {
    // TODO(skelly): remove clears that are not required
    _allComponentsA.clear();
@@ -269,6 +488,7 @@ void TPG::finalize() {
    _Memory.resize(MemoryEigen::kNumMemoryType_);
 
    phylo_graph_.clear();
+   map_elites_archive_.clear();
 }
 
 /******************************************************************************/
@@ -284,6 +504,51 @@ void TPG::TeamMutator_ProgramOrder(team* team_to_mu) {
       (team_to_mu)->MuProgramOrder(i, j);
    }
 }
+
+/******************************************************************************/
+// void TPG::TeamMutator_LambdaVariation(team* team_to_mu) {
+//    if (real_dist_(rngs_[TPG_SEED]) < GetParam<double>("pml")) {
+//         const double scaling_factor = 2.0;
+
+//         std::uniform_real_distribution<double> exponent_dist(-1.0, 1.0);
+
+//         double mutation_factor = std::pow(scaling_factor, exponent_dist(rngs_[TPG_SEED]));
+
+//         team_to_mu->lambda_td_ *= mutation_factor;
+//         team_to_mu->lambda_td_ = std::clamp(team_to_mu->lambda_td_, 0.0, 1.0);
+//     }
+// }
+
+void TPG::TeamMutator_LambdaVariation(team* team_to_mu) {
+   if (real_dist_(rngs_[TPG_SEED]) < GetParam<double>("pml")){
+
+   std::normal_distribution<double> gauss_lambda(0.0, 0.5);
+   double factor = std::exp(gauss_lambda(rngs_[TPG_SEED])); 
+   team_to_mu->lambda_td_ = std::clamp(team_to_mu->lambda_td_ * factor, 0.0, 1.0);}
+   }
+
+/******************************************************************************/
+void TPG::TeamMutator_DecayVariation(team* team_to_mu) {
+   if (real_dist_(rngs_[TPG_SEED]) < GetParam<double>("pmdf")){
+   std::normal_distribution<double> gauss_lambda(0.0, 0.5);
+   double factor = std::exp(gauss_lambda(rngs_[TPG_SEED])); 
+   team_to_mu->decay_factor_ = std::clamp(team_to_mu->decay_factor_ * factor, 0.0, 1.0);
+   }
+}
+
+// void TPG::TeamMutator_DecayVariation(team* team_to_mu) {
+//    if (real_dist_(rngs_[TPG_SEED]) < GetParam<double>("pmdf")) {
+//         const double scaling_factor = 2.0;
+
+//         std::uniform_real_distribution<double> exponent_dist(-1.0, 1.0);
+
+//         double mutation_factor = std::pow(scaling_factor, exponent_dist(rngs_[TPG_SEED]));
+
+//         team_to_mu->decay_factor_ *= mutation_factor;
+//         team_to_mu->decay_factor_ = std::clamp(team_to_mu->decay_factor_, 0.0, 1.0);
+//     }
+// }
+
 
 /******************************************************************************/
 void TPG::TeamMutator_AddPrograms(team* team_to_mu) {
@@ -306,9 +571,10 @@ void TPG::TeamMutator_RemovePrograms(team* team_to_mu) {
       team_to_mu->RemoveRandomProgram(rngs_[TPG_SEED]);
 }
 
+
 /******************************************************************************/
 team* TPG::CloneTeam(team* team_to_clone) {
-   team* team_clone = new team(GetState("t_current"), state_["team_count"]++);
+   team* team_clone = new team(GetState("t_current"), state_["team_count"]++, team_to_clone->obs_index_, team_to_clone->lambda_td_, team_to_clone->decay_factor_);
    for (auto m : team_to_clone->members_) {
       team_clone->AddProgram(m);
    }
@@ -318,7 +584,7 @@ team* TPG::CloneTeam(team* team_to_clone) {
 /******************************************************************************/
 RegisterMachine* TPG::CloneProgram(RegisterMachine* prog) {
    RegisterMachine* prog_clone = new RegisterMachine(
-       *(dynamic_cast<RegisterMachine*>(prog)), params_, state_);
+       *(dynamic_cast<RegisterMachine*>(prog)), params_, state_, rngs_[TPG_SEED]);
    if (prog_clone->action_ >= 0)
       team_map_[prog_clone->action_]->AddIncomingProgram(prog_clone->id_);
    return prog_clone;
@@ -326,7 +592,27 @@ RegisterMachine* TPG::CloneProgram(RegisterMachine* prog) {
 
 /******************************************************************************/
 void TPG::ProgramMutator_Instructions(RegisterMachine* prog_to_mu) {
-   prog_to_mu->Mutate(params_, state_, rngs_[TPG_SEED], _ops);
+   const int mutation_passes =
+       HaveParam("n_mutation_passes") ? GetParam<int>("n_mutation_passes") : 1;
+   if (mutation_passes < 1) {
+      die(__FILE__, __FUNCTION__, __LINE__,
+          "n_mutation_passes must be at least one.");
+   }
+   // Normally mutation consumes the parent's final self-modified S2-S6
+   // outputs. This ablation instead makes mutation consume the inherited
+   // constants by resetting working memory before the first mutation pass.
+   if (HaveParam("reset_self_modifying_before_mutation") &&
+       GetParam<int>("reset_self_modifying_before_mutation") != 0) {
+      prog_to_mu->SeedSelfModifyingWorkingFromConstants(params_);
+   }
+   for (int pass = 0; pass < mutation_passes; ++pass) {
+      prog_to_mu->Mutate(params_, state_, rngs_[TPG_SEED], _ops);
+   }
+   // All stacked passes use the selected starting rates (parent outputs by
+   // default, inherited constants in the reset-before ablation). Once
+   // variation is complete, prepare the child to start evaluation from its
+   // inherited constants, which may have evolved if that ablation is enabled.
+   prog_to_mu->SeedSelfModifyingWorkingFromConstants(params_);
 }
 
 /******************************************************************************/
@@ -381,7 +667,7 @@ void TPG::MutateActionToTeam(RegisterMachine* prog_to_mu, team* new_team,
          prog_to_mu->action_ = tm->id_;
          tm->AddIncomingProgram(prog_to_mu->id_);
       } else {  // clone when subsumed
-         team* sub = new team(GetState("t_current"), state_["team_count"]++);
+         team* sub = new team(GetState("t_current"), state_["team_count"]++, tm->obs_index_, tm->lambda_td_, tm->decay_factor_);
          tm->clone(phylo_graph_, &sub);
          prog_to_mu->action_ = sub->id_;
          sub->AddIncomingProgram(prog_to_mu->id_);
@@ -422,24 +708,45 @@ void TPG::AddTeamToPhylogeny(team* new_team) {
    phylo_graph_[new_team->id_].root = new_team->root_;
 }
 
+// void TPG::InsertTeamLambdaToCSV(team* new_team) {
+//    phylo_graph_[new_team->id_].gtime = GetState("t_current");
+//    phylo_graph_[new_team->id_].root = new_team->root_;
+// }
+
+
 /******************************************************************************/
 team* TPG::TeamCrossover(team* parent1, team* parent2) {
-   team* child_team = new team(GetState("t_current"), state_["team_count"]++);
+   double lambda_to_use = 0.0;
+   double decay_to_use = 0.0;
+   if (real_dist_(rngs_[TPG_SEED]) > 0.5){
+      lambda_to_use = parent1->lambda_td_;}
+   else{
+      lambda_to_use = parent2->lambda_td_;}
+   
+   if (real_dist_(rngs_[TPG_SEED]) > 0.5){
+      decay_to_use = parent1->decay_factor_;}
+   else{
+      decay_to_use = parent2->decay_factor_;}
+
+   team* child_team = new team(GetState("t_current"), state_["team_count"]++, ((parent1->obs_index_ + parent2->obs_index_)/2), lambda_to_use, decay_to_use);
+   
    // TODO(skelly): linear crossover
    if (parent1->size() == 1 && parent2->size() == 1 &&
        parent1->members_.front()->instructions_.size() > 1 &&
-       parent2->members_.front()->instructions_.size() > 1) {
+       parent2->members_.front()->instructions_.size() > 1 && (real_dist_(rngs_[TPG_SEED]) <  GetParam<double>("p_crossover"))) {
       RegisterMachine* child_1;
       RegisterMachine* child_2;
-      RegisterMachineCrossover(parent1->members_.front(),
-                               parent2->members_.front(), &child_1, &child_2);
-      AddProgram(child_1);
-      AddProgram(child_2);                         
-      if (real_dist_(rngs_[TPG_SEED]) < 0.5) {
-         child_team->AddProgram(child_1);
-      } else {
-         child_team->AddProgram(child_2);
-      }
+      //RegisterMachineCrossover(parent1->members_.front(), parent2->members_.front(), &child_1, &child_2);
+      
+      LinearCrossover(parent1->members_.front(), parent2->members_.front(), &child_1, &child_2);
+
+      RegisterMachine* child_prog = (real_dist_(rngs_[TPG_SEED]) < 0.5) ? child_1 : child_2;
+      RegisterMachine* unused_prog = (child_prog == child_1) ? child_2 : child_1;
+
+      AddProgram(child_prog);
+
+      child_team->AddProgram(child_prog);
+      delete unused_prog;
    } else {
       std::list<RegisterMachine*> p1_progs = parent1->members_;
       auto p1_it = p1_progs.begin();
@@ -472,31 +779,285 @@ team* TPG::TeamCrossover(team* parent1, team* parent2) {
          if (p2_it != p2_progs.end())
             p2_it++;
       }
-      if (child_team->n_atomic_ < 1) {
-         die(__FILE__, __FUNCTION__, __LINE__,
-             "Crossover must leave the fail-safe atomic program.");
-      }
    }
    return child_team;
 }
 
+
+/******************************************************************************/
+// NSGA-II with configurable objectives:
+//   (1) fitness (mandatory, maximize)
+//   (2+) configurable objectives from pareto_objectives param (all minimize):
+//        - flops: weighted instruction cost (FLOPs) across all effective instructions
+//        - total_instructions: sum of instructions_.size() across all programs
+//        - effective_instructions: sum of instructions_effective_.size() across all programs
+//        - total_registers: sum of n_memories_ across all programs
+//        - effective_registers: sum of n_effective_registers_ across all programs
+// Writes into: team->pareto_rank_ (lower is better), team->crowding_distance_ (higher is better)
+void TPG::ComputeParetoFronts(std::vector<team*>& teams) {
+  if (teams.empty()) return;
+  const size_t n = teams.size();
+
+  std::string objectives_str = "";
+  if (HaveParam("pareto_objectives")) {
+    objectives_str = GetParam<std::string>("pareto_objectives");
+  }
+  
+  bool use_flops = (objectives_str.find("flops") != std::string::npos);
+  bool use_total_instructions = (objectives_str.find("total_instructions") != std::string::npos);
+  bool use_effective_instructions = (objectives_str.find("effective_instructions") != std::string::npos);
+  bool use_total_registers = (objectives_str.find("total_registers") != std::string::npos);
+  bool use_effective_registers = (objectives_str.find("effective_registers") != std::string::npos);
+
+  size_t num_objectives = 1; // fitness is always included
+  if (use_flops) num_objectives++;
+  if (use_total_instructions) num_objectives++;
+  if (use_effective_instructions) num_objectives++;
+  if (use_total_registers) num_objectives++;
+  if (use_effective_registers) num_objectives++;
+  std::vector<std::vector<double>> objectives(n, std::vector<double>(num_objectives, 0.0));
+
+  for (size_t i = 0; i < n; ++i) {
+    const team* t = teams[i];
+    if (!t) continue;
+
+    size_t obj_idx = 0;
+    objectives[i][obj_idx++] = t->fit_;
+
+    double flops_sum = 0.0;
+    double total_instr = 0.0;
+    double effective_instr = 0.0;
+    double total_regs = 0.0;
+    double effective_regs = 0.0;
+
+    for (auto* prog : t->members_) {
+      if (!prog) continue;
+      if (use_flops) {
+        double mat_size = prog->private_memory_[MemoryEigen::kMatrixType_]->memory_size_;
+        for (auto* instr : prog->instructions_effective_) {
+          flops_sum += instruction::GetOperationFLOPs(instr->op_, mat_size);
+        }
+      }
+      total_instr += static_cast<double>(prog->instructions_.size());
+      effective_instr += static_cast<double>(prog->instructions_effective_.size());
+      total_regs += static_cast<double>(prog->n_memories_);
+      effective_regs += static_cast<double>(prog->n_effective_registers_);
+    }
+
+    if (use_flops) objectives[i][obj_idx++] = flops_sum;
+    if (use_total_instructions) objectives[i][obj_idx++] = total_instr;
+    if (use_effective_instructions) objectives[i][obj_idx++] = effective_instr;
+    if (use_total_registers) objectives[i][obj_idx++] = total_regs;
+    if (use_effective_registers) objectives[i][obj_idx++] = effective_regs;
+  }
+
+  // Dominance: A dominates B if A is no worse in all objectives and strictly better in at least one.
+  // Objective 0 (fitness): higher is better
+  // All other objectives: lower is better
+  auto dominates = [&](size_t a, size_t b) -> bool {
+    bool no_worse = true;
+    bool strictly_better = false;
+
+    for (size_t obj = 0; obj < num_objectives; ++obj) {
+      if (obj == 0) {
+        // Fitness: maximize (higher is better)
+        if (objectives[a][obj] < objectives[b][obj]) no_worse = false;
+        if (objectives[a][obj] > objectives[b][obj]) strictly_better = true;
+      } else {
+        // Other objectives: minimize (lower is better)
+        if (objectives[a][obj] > objectives[b][obj]) no_worse = false;
+        if (objectives[a][obj] < objectives[b][obj]) strictly_better = true;
+      }
+    }
+
+    return no_worse && strictly_better;
+  };
+
+  // Fast pairwise fill: only compare (i,j) once
+  std::vector<int> domination_count(n, 0);
+  std::vector<std::vector<size_t>> dominates_list(n);
+
+  for (size_t i = 0; i < n; ++i) {
+    for (size_t j = i + 1; j < n; ++j) {
+      if (dominates(i, j)) {
+        dominates_list[i].push_back(j);
+        domination_count[j]++;
+      } else if (dominates(j, i)) {
+        dominates_list[j].push_back(i);
+        domination_count[i]++;
+      }
+    }
+  }
+
+  // Build Pareto fronts
+  std::vector<std::vector<size_t>> fronts;
+  fronts.emplace_back();
+  fronts.back().reserve(n);
+
+  for (size_t i = 0; i < n; ++i) {
+    if (domination_count[i] == 0) {
+      teams[i]->pareto_rank_ = 0;
+      fronts[0].push_back(i);
+    }
+  }
+
+  int front_rank = 0;
+  while (front_rank < (int)fronts.size() && !fronts[front_rank].empty()) {
+    std::vector<size_t> next_front;
+    for (size_t p : fronts[front_rank]) {
+      for (size_t q : dominates_list[p]) {
+        if (--domination_count[q] == 0) {
+          teams[q]->pareto_rank_ = front_rank + 1;
+          next_front.push_back(q);
+        }
+      }
+    }
+    if (!next_front.empty()) fronts.push_back(std::move(next_front));
+    front_rank++;
+  }
+
+  // Crowding distance (sum of normalized gaps across all objectives)
+  const double INF = std::numeric_limits<double>::max();
+  auto safe_range = [](double r) { return (r < 1e-12 ? 1.0 : r); };
+
+  for (const auto& front : fronts) {
+    const size_t fsize = front.size();
+    if (fsize == 0) continue;
+
+    for (size_t idx : front) teams[idx]->crowding_distance_ = 0.0;
+
+    if (fsize <= 2) {
+      for (size_t idx : front) teams[idx]->crowding_distance_ = INF;
+      continue;
+    }
+
+    std::vector<size_t> sorted = front;
+
+    // Compute crowding distance for each objective
+    for (size_t obj = 0; obj < num_objectives; ++obj) {
+      // Sort by this objective (ascending)
+      std::sort(sorted.begin(), sorted.end(), [&](size_t a, size_t b) {
+        return objectives[a][obj] < objectives[b][obj];
+      });
+
+      // Boundary points get infinite crowding distance
+      teams[sorted.front()]->crowding_distance_ = INF;
+      teams[sorted.back()]->crowding_distance_ = INF;
+
+      double obj_range = safe_range(objectives[sorted.back()][obj] - objectives[sorted.front()][obj]);
+
+      // Interior points: add normalized gap contribution
+      for (size_t k = 1; k + 1 < fsize; ++k) {
+        if (teams[sorted[k]]->crowding_distance_ >= INF) continue;
+        teams[sorted[k]]->crowding_distance_ += 
+            (objectives[sorted[k + 1]][obj] - objectives[sorted[k - 1]][obj]) / obj_range;
+      }
+    }
+  }
+}
+
 /******************************************************************************/
 team* TPG::TeamSelector_Tournament(vector<team*>& candidate_parent_teams) {
-   uniform_int_distribution<int> dis(0, candidate_parent_teams.size() - 1);
-   auto tournament_size = GetParam<int>("tournament_size");
-   auto tm = candidate_parent_teams[dis(rngs_[TPG_SEED])];
-   while (tournament_size-- > 0) {
-      auto i = dis(rngs_[TPG_SEED]);
-      if (candidate_parent_teams[i]->fit_ > tm->fit_) {
-         tm = candidate_parent_teams[i];
+   if (candidate_parent_teams.empty()) return nullptr;
+
+   uniform_int_distribution<int> dis(
+       0, static_cast<int>(candidate_parent_teams.size()) - 1);
+   const int tsize = std::max(1, GetParam<int>("tournament_size"));
+
+   // NSGA-II style comparison: 
+   // 1. Lower Pareto rank is better
+   // 2. If same rank, higher crowding distance is better (promotes diversity)
+   auto better = [&](const team* a, const team* b) -> bool {
+      if (!b) return true;
+      if (!a) return false;
+
+      // Compare by Pareto front rank first (lower is better)
+      if (a->pareto_rank_ < b->pareto_rank_) return true;
+      if (a->pareto_rank_ > b->pareto_rank_) return false;
+
+      // Same front: prefer higher crowding distance (more diverse/spread out)
+      if (a->crowding_distance_ > b->crowding_distance_) return true;
+      if (a->crowding_distance_ < b->crowding_distance_) return false;
+
+      // Tie-breaker: prefer younger (more recent innovation)
+      return a->id_ > b->id_;
+   };
+
+   /* COMMENTED OUT: Old lexicographic parsimony selection
+   auto mean_n_memories = [](const team* t) -> double {
+      if (!t || t->members_.empty()) return 0.0;
+      double sum = 0.0;
+      for (auto* p : t->members_) {
+         if (p) sum += static_cast<double>(p->n_memories_);
       }
+      return sum / static_cast<double>(t->members_.size());
+   };
+
+   auto total_program_instructions_in_policy = [](const team* t) -> double {
+      if (!t || t->members_.empty()) return 0.0;
+      double sum = 0.0;
+      for (auto* prog : t->members_) {
+         if (prog) sum += static_cast<double>(prog->instructions_.size());
+      }
+      return sum;
+   };
+
+   auto complexity_score = [&](const team* t) -> double {
+      const double I = total_program_instructions_in_policy(t);
+      const double M = mean_n_memories(t);
+      return M;
+   };
+
+   auto better_lexicographic = [&](const team* a, const team* b) -> bool {
+      if (!b) return true;
+      if (!a) return false;
+
+      const double fa = a->fit_;
+      const double fb = b->fit_;
+
+      const double scale = std::max({1.0, std::abs(fa), std::abs(fb)});
+      const double eps_fit = 1e-3 * scale;
+
+      if (fa > fb + eps_fit) return true;
+      if (fb > fa + eps_fit) return false;
+
+      const double ca = complexity_score(a);
+      const double cb = complexity_score(b);
+      const double eps_c = 1e-12 * (1.0 + std::abs(ca) + std::abs(cb));
+
+      if (ca < cb - eps_c) return true;
+      if (cb < ca - eps_c) return false;
+
+      const double Ia = total_program_instructions_in_policy(a);
+      const double Ib = total_program_instructions_in_policy(b);
+      const double eps_I = 1e-12 * (1.0 + std::abs(Ia) + std::abs(Ib));
+
+      if (Ia < Ib - eps_I) return true;
+      if (Ib < Ia - eps_I) return false;
+
+      const double Ma = mean_n_memories(a);
+      const double Mb = mean_n_memories(b);
+      const double eps_M = 1e-12 * (1.0 + std::abs(Ma) + std::abs(Mb));
+
+      if (Ma < Mb - eps_M) return true;
+      if (Mb < Ma - eps_M) return false;
+
+      return a->id_ < b->id_;
+   };
+   END COMMENTED OUT */
+
+   team* best = candidate_parent_teams[dis(rngs_[TPG_SEED])];
+   for (int k = 1; k < tsize; ++k) {
+      team* cand = candidate_parent_teams[dis(rngs_[TPG_SEED])];
+      if (better(cand, best)) best = cand;
    }
-   return tm;
+   return best;
 }
 
 /******************************************************************************/
 void TPG::GenerateNewTeams() {
    int new_teams_count = 0;
+   const bool shadow_run = GetParam<int>("shadow_run") != 0;
    auto task_power_set = PowerSet(GetState("n_task"));
    int n_new_teams_per_set =
        GetParam<int>("n_root_gen") / task_power_set.size();
@@ -505,6 +1066,8 @@ void TPG::GenerateNewTeams() {
       candidate_parent_teams.resize(team_pop_.size());
       std::copy(team_pop_.begin(), team_pop_.end(),
                 candidate_parent_teams.begin());
+      // Pareto ranks are only needed for fitness-based tournament selection.
+      if (!shadow_run) ComputeParetoFronts(candidate_parent_teams);
    }
    for (auto& subset : task_power_set) {
       //TODO(skelly): put selection in a separate function
@@ -512,15 +1075,18 @@ void TPG::GenerateNewTeams() {
          if (task_set_map_[VectorToStringNoSpace(subset)].size() == 0)
             continue;
          candidate_parent_teams = task_set_map_[VectorToStringNoSpace(subset)];
+         // Pareto ranks are only needed for fitness-based tournament selection.
+         if (!shadow_run) ComputeParetoFronts(candidate_parent_teams);
       }
       uniform_int_distribution<int> disP(0, candidate_parent_teams.size() - 1);
       for (int i = 0; i < n_new_teams_per_set; i++) {
          team* parent_team1;
          team* parent_team2;
-         if (GetParam<int>("tournament_size") > 0) {  // Tournament selection
+         if (!shadow_run && GetParam<int>("tournament_size") > 0) {
+            // Fitness-based tournament selection.
             parent_team1 = TeamSelector_Tournament(candidate_parent_teams);
             parent_team2 = TeamSelector_Tournament(candidate_parent_teams);
-         } else {  // Random selection
+         } else {  // Random selection, including shadow runs.
             parent_team1 = candidate_parent_teams[disP(rngs_[TPG_SEED])];
             parent_team2 = candidate_parent_teams[disP(rngs_[TPG_SEED])];
          }
@@ -535,6 +1101,7 @@ void TPG::GenerateNewTeams() {
             AddAncestorToPhylogeny(parent_team1, child_team);
          }
          AddTeamToPhylogeny(child_team);
+         // InsertTeamLambdaToCSV(child_team);
          // Mutate child team
          ApplyVariationOps(child_team, new_teams_count);
          AddTeam(child_team);
@@ -563,6 +1130,8 @@ void TPG::GenerateNewTeams() {
 void TPG::ApplyVariationOps(team* team_to_modify, int& n_new_teams) {
    uniform_int_distribution<int> disL(0, program_pop_.size() - 1);
    // Mutate team
+   TeamMutator_LambdaVariation(team_to_modify);
+   TeamMutator_DecayVariation(team_to_modify);
    TeamMutator_RemovePrograms(team_to_modify);
    TeamMutator_AddPrograms(team_to_modify);
    TeamMutator_ProgramOrder(team_to_modify);
@@ -594,6 +1163,71 @@ void TPG::ApplyVariationOps(team* team_to_modify, int& n_new_teams) {
       }
    }
 }
+
+/******************************************************************************/ 
+void TPG::ExtinctionEvent() {
+    int keepPercentage = GetParam<int>("extinction_percentage");
+    int totalTeams = team_pop_.size();
+    const bool shadow_run = GetParam<int>("shadow_run") != 0;
+    
+    if (totalTeams <= 1)
+        return;
+
+    // Normal extinction preserves the best team.  Shadow runs sample every
+    // survivor uniformly, including the best team, to avoid fitness selection.
+    team* bestTeam = shadow_run ? nullptr : GetBestTeam();
+    vector<team*> candidates;
+    for (auto tm : GetRootTeamsInVec()) {
+        if (!bestTeam || tm->id_ != bestTeam->id_) {
+            candidates.push_back(tm);
+        }
+    }
+    
+    int candidateCount = candidates.size();
+    int keepCandidates = std::max(0, static_cast<int>(std::ceil(candidateCount * (keepPercentage / 100.0))));
+    std::shuffle(candidates.begin(), candidates.end(), rngs_[TPG_SEED]);
+
+    unordered_set<team*> teamsToKeep;
+    if (bestTeam) teamsToKeep.insert(bestTeam);
+    for (int i = 0; i < keepCandidates && i < candidateCount; ++i) {
+        teamsToKeep.insert(candidates[i]);
+    }
+
+    int n_deleted = 0;
+    int n_old_deleted = 0;
+    int n_root_remaining = 0;
+
+    for (auto tm : GetRootTeamsInVec()) {
+        if (teamsToKeep.find(tm) == teamsToKeep.end()) {
+            phylo_graph_[tm->id_].dtime = GetState("t_current");
+            n_deleted++;
+            n_old_deleted += (tm->gtime_ < GetState("t_current")) ? 1 : 0;
+            RemoveTeam(tm);
+        }
+        n_root_remaining++;
+    }
+
+    CleanupProgramsWithNoRefs();
+
+    oss << "ExtinctionEvent: Randomly kept " << teamsToKeep.size() 
+        << " teams out of " << totalTeams 
+        << ", removed " << n_deleted 
+        << " teams (old deleted: " << n_old_deleted << ")" << endl;
+
+    RemovalMetricsBuilder builder;
+    builder.with_generation(GetState("t_current"))
+           .with_num_teams(team_pop_.size())
+           .with_num_programs(program_pop_.size())
+           .with_num_root_programs(n_root_remaining)
+           .with_num_elite_teams(_numEliteTeamsCurrent[GetState("phase")])
+           .with_num_deleted(n_deleted)
+           .with_num_old_deleted(n_old_deleted)
+           .with_percent_old_deleted(n_deleted > 0 ? (double)n_old_deleted / n_deleted : 0);
+
+    RemovalMetrics metrics = builder.build();
+    EventDispatcher<RemovalMetrics>::instance().notify(EventType::REMOVAL, metrics);
+}
+
 
 /******************************************************************************/
 team* TPG::GetBestTeam() {
@@ -641,6 +1275,33 @@ void TPG::FindSingleTaskFitnessRange(vector<TaskEnv*>& tasks,
          } else {
             // mark elite to protect until eval in all tasks
             tm->elite(true);
+         }
+      }
+      if (teamsRankedVec.size() > 0) {
+         sort(teamsRankedVec.begin(), teamsRankedVec.end(),
+              teamFitnessLexicalCompare());
+         maxs[GetState("fitMode")][task] = (*(teamsRankedVec.begin()))->fit_;
+         mins[GetState("fitMode")][task] = (*(teamsRankedVec.rbegin()))->fit_;
+      }
+   }
+}
+
+void TPG::FindSingleTaskMinMax(vector<TaskEnv*>& tasks,
+                                     vector<vector<double>>& mins,
+                                     vector<vector<double>>& maxs) {
+   vector<team*> teamsRankedVec;
+   for (int task = 0; task < GetState("n_task"); task++) {
+      teamsRankedVec.clear();
+      for (auto tm : GetRootTeamsInVec()) {
+         tm->elite(GetState("phase"), false);
+         if (tm->numOutcomes(GetState("phase"), task) >=
+             tasks[task]->GetNumEval(GetState("phase"))) {
+            tm->fit_ = tm->GetMeanOutcome(GetState("phase"), task,
+                                            GetState("fitMode"));
+            teamsRankedVec.push_back(tm);
+            if (GetState("phase") == _TEST_PHASE) {
+               UpdateTeamPhyloData(tm);
+            }
          }
       }
       if (teamsRankedVec.size() > 0) {
@@ -714,12 +1375,25 @@ void TPG::FindMultiTaskElites(vector<TaskEnv*>& tasks,
       auto teams_normed_scores =
           NormalizeScoresAndRankTeams(tasks, set, min_scores, max_scores);
 
-      sort(teams_normed_scores.begin(), teams_normed_scores.end(),
-           teamFitnessLexicalCompare());
+      // A shadow run replaces fitness-based survivor selection with a
+      // reproducible random ordering.  Use the evolution RNG (seed_tpg), not
+      // the auxiliary/environment RNG, so the selected population is fully
+      // determined by the experiment seed.
+      const bool shadow_run =
+          GetState("phase") == _TRAIN_PHASE && GetParam<int>("shadow_run") != 0;
+      if (shadow_run) {
+         std::shuffle(teams_normed_scores.begin(), teams_normed_scores.end(),
+                      rngs_[TPG_SEED]);
+      } else {
+         sort(teams_normed_scores.begin(), teams_normed_scores.end(),
+              teamFitnessLexicalCompare());
+      }
       // sort(teams_normed_scores.begin(), teams_normed_scores.end(),
       // teamFitComplexLexCompare());
       size_t elite_count = 0;
       for (auto tm : teams_normed_scores) {
+         if ((elite_count >= n_elite_per_task) || _numEliteTeamsCurrent[GetState("phase")] == static_cast<size_t>(GetParam<int>("n_root")))
+            break;
          if (!tm->elite(GetState("phase"))) {
             elite_count++;
             _numEliteTeamsCurrent[GetState("phase")]++;
@@ -739,8 +1413,6 @@ void TPG::FindMultiTaskElites(vector<TaskEnv*>& tasks,
             if (GetState("phase") == _TRAIN_PHASE)
                task_set_map_[VectorToStringNoSpace(set)].push_back(tm);
          }
-         if (elite_count >= n_elite_per_task)
-            break;
       }
       // Always keep track of single elite team for each task set
       _eliteTeamPS[VectorToStringNoSpace(set)][GetState("fitMode")]
@@ -752,14 +1424,30 @@ void TPG::FindMultiTaskElites(vector<TaskEnv*>& tasks,
 void TPG::SetEliteTeams(vector<TaskEnv*>& tasks) {
    vector<team*> teams_normed_scores;
    _numEliteTeamsCurrent[GetState("phase")] = 0;
-   // min/max scores for normalization, overcomplicated data structure?
+   const bool shadow_run =
+       GetState("phase") == _TRAIN_PHASE && GetParam<int>("shadow_run") != 0;
    vector<vector<double>> min_scores, max_scores;
    min_scores.resize(GetParam<int>("n_fit_mode"));
    max_scores.resize(GetParam<int>("n_fit_mode"));
    min_scores[GetState("fitMode")].resize(GetState("n_task"));
    max_scores[GetState("fitMode")].resize(GetState("n_task"));
 
-   FindSingleTaskFitnessRange(tasks, min_scores, max_scores);
+   // MAP ELITES
+   // MAP-Elites supplies archive survivors.  Shadow runs bypass the archive so
+   // the actual training survivor selection remains random.
+   if (GetParam<int>("map_elites") && !shadow_run) {
+      FindSingleTaskMinMax(tasks, min_scores, max_scores);
+      UpdateMapElitesArchive();
+
+      for (auto rep : map_elites_archive_) {
+         if (rep){
+            rep->elite(GetState("phase"), true);
+            _numEliteTeamsCurrent[GetState("phase")]++;
+         }}
+      SaveMapElitesArchive();
+   }else{
+      FindSingleTaskFitnessRange(tasks, min_scores, max_scores);
+   }
    FindMultiTaskElites(tasks, min_scores, max_scores);
 
    auto PS = PowerSet(GetState("n_task"));
@@ -767,26 +1455,9 @@ void TPG::SetEliteTeams(vector<TaskEnv*>& tasks) {
       auto elite_id = _eliteTeamPS[VectorToStringNoSpace(set)][GetState("fitMode")]
                                   [GetState("phase")]
                                       ->id_;
-      if (set.size() == 1 &&
-          haveEliteTeam(VectorToStringNoSpace(set), GetState("fitMode"),
-                        GetState("phase"))) {
-         oss << "setElTmsST eLSz " << _numEliteTeamsCurrent[GetState("phase")]
-             << " ss " << VectorToStringNoSpace(set) << " fm " << GetState("fitMode")
-             << " minThr "
-             << _eliteTeamPS[VectorToStringNoSpace(set)][GetState("fitMode")]
-                            [GetState("phase")]
-                                ->fit_
-             << " ";
-         printTeamInfo(GetState("t_current"), GetState("phase"), false,
-                       false, elite_id);
-
-         if (GetParam<int>("track_experiments") &&
-             GetState("t_current") % GetParam<int>("track_mod") == 0) {
-            trackTeamInfo(GetState("t_current"), GetState("phase"), false,
-                          elite_id);
-         }
-      }
-      if (set.size() == (size_t)GetState("n_task") &&
+      const bool is_full_task_set =
+          set.size() == static_cast<size_t>(GetState("n_task"));
+      if (is_full_task_set &&
           haveEliteTeam(VectorToStringNoSpace(set), GetState("fitMode"),
                         GetState("phase"))) {
          oss << "setElTmsMTA eLSz " << _numEliteTeamsCurrent[GetState("phase")]
@@ -805,14 +1476,30 @@ void TPG::SetEliteTeams(vector<TaskEnv*>& tasks) {
                           elite_id);
          }
 
-         // Keep track of elite team history and only save checkpoints
-         // when we have a new champion for this phase
          if (HaveParam("save_champ_checkpoints") &&
              GetState("phase") == GetParam<int>("save_champ_checkpoints") &&
              elite_team_id_history_.find(elite_id) ==
                  elite_team_id_history_.end()) {
             elite_team_id_history_.insert(elite_id);
             WriteCheckpoint(false);
+         }
+      } else if (set.size() == 1 &&
+                 haveEliteTeam(VectorToStringNoSpace(set), GetState("fitMode"),
+                               GetState("phase"))) {
+         oss << "setElTmsST eLSz " << _numEliteTeamsCurrent[GetState("phase")]
+             << " ss " << VectorToStringNoSpace(set) << " fm " << GetState("fitMode")
+             << " minThr "
+             << _eliteTeamPS[VectorToStringNoSpace(set)][GetState("fitMode")]
+                            [GetState("phase")]
+                                ->fit_
+             << " ";
+         printTeamInfo(GetState("t_current"), GetState("phase"), false,
+                       false, elite_id);
+
+         if (GetParam<int>("track_experiments") &&
+             GetState("t_current") % GetParam<int>("track_mod") == 0) {
+            trackTeamInfo(GetState("t_current"), GetState("phase"), false,
+                          elite_id);
          }
       }
    }
@@ -838,14 +1525,32 @@ void TPG::InitTeams() {
                                  : 0;
    uniform_int_distribution<int> dis_actions(0, max_discrete_action);
    uniform_int_distribution<int> dis_team_size(
-       1, GetParam<int>("max_initial_team_size"));
+       GetParam<int>("min_initial_team_size"), GetParam<int>("max_initial_team_size"));
    int initial_team_size = dis_team_size(rngs_[TPG_SEED]);
+   uniform_int_distribution<int> dis_obs_index(0, 100000);
+   int team_obs_size;
+   uniform_real_distribution<double> dis_td_values(0.0,1.0);
+   // normal_distribution<double> dis_td_values(0.5, 0.5);
+   
+   double lambda_gen_val = GetParam<double>("lambda_td");
+   double decay_gen_val = GetParam<double>("decay_factor");
    for (int t = 0; t < GetParam<int>("n_root"); t++) {
-      auto new_team = new team(GetState("t_current"), state_["team_count"]++);
+      if (lambda_gen_val == 0.0){
+         lambda_gen_val = clamp(dis_td_values(rngs_[TPG_SEED]), 0.0, 1.0);
+      }
+      if (decay_gen_val == 0.0){
+         decay_gen_val = clamp(dis_td_values(rngs_[TPG_SEED]), 0.0, 1.0);
+      }
+      if(GetParam<int>("team_obs_size"))
+         team_obs_size = dis_obs_index(rngs_[TPG_SEED]);
+      else 
+         team_obs_size = 0;
+      auto new_team = new team(GetState("t_current"), state_["team_count"]++, team_obs_size, lambda_gen_val, decay_gen_val);
       for (int p = 0; p < initial_team_size; p++) {
          // Discrete atomic actions are negatives -1 to -numAtomicActions()
+         
          long discrete_action = -1 - dis_actions(rngs_[TPG_SEED]);
-         auto new_prog = new RegisterMachine(discrete_action, params_, state_,
+         auto new_prog = new RegisterMachine(discrete_action, team_obs_size, params_, state_,
                                              rngs_[TPG_SEED], _ops);
          new_team->AddProgram(new_prog);
          AddProgram(new_prog);  // add program to program population
@@ -880,6 +1585,7 @@ void TPG::ProcessParams() {
    state_["t_current"] = GetState("t_start");
 }
 
+
 /******************************************************************************/
 // Parameters are set in the parameters.yaml file.
 // TPG can also process command line parameters in the form: <name>=<value>
@@ -890,6 +1596,18 @@ void TPG::SetParams(int argc, char** argv) {
    // ReadParameters("parameters.yaml", params_);
    // Parse command line parameters
    params_["pid"] = 0; // Set default param value for PID
+   // Keep this opt-in parameter available to every existing configuration and
+   // allow it to be overridden on the command line.
+   params_["shadow_run"] = 0;
+   // Baldwinian inheritance remains the default. Configurations can opt into
+   // writing parent-produced S2-S5 outputs into offspring constants.
+   params_["lamarkism_evolved_constants"] = 0;
+   // By default S2-S6 constants retain their historical ability to evolve.
+   // Set this to 0 for the fixed-constant self-modification ablation.
+   params_["evolve_self_modifying_constants"] = 1;
+   // Preserve parent-produced rates through offspring mutation by default.
+   // Set to 1 to reset working S2-S6 from constants before mutation instead.
+   params_["reset_self_modifying_before_mutation"] = 0;
    if (argc > 1) {
       for (int i = 1; i < argc; ++i) {
          std::string arg = argv[i];
@@ -901,7 +1619,9 @@ void TPG::SetParams(int argc, char** argv) {
                ReadParameters(val, params_);
             }
             else if (HaveParam(key)) {
-               if (val.find('.') != std::string::npos) {
+               if (params_[key].type() == typeid(std::string)) {
+                  params_[key] = val;
+               } else if (val.find('.') != std::string::npos) {
                   params_[key] = stringToDouble(val);
                } else {
                   params_[key] = stringToInt(val);
@@ -1347,95 +2067,270 @@ void TPG::GetPolicyFeatures(int hostId, set<long>& features, bool active) {
 
 /******************************************************************************/
 void TPG::printGraphDotGPTPXXI(long rootTeamId,
-                               set<team*, teamIdComp>& visitedTeamsAllTasks,
-                               vector<map<long, double>>& teamUseMapPerTask,
-                               vector<int>& steps_per_task) {
-   team* rootTeam = team_map_[rootTeamId];
-   vector<string> taskCol;
-   taskCol.push_back("#7fc97f");
-   taskCol.push_back("#beaed4");
-   taskCol.push_back("#fdc086");
-   taskCol.push_back("#ffff99");
-   // taskCol.push_back("#386cb0");
-   // taskCol.push_back("#f0027f");
-   map<long, string> nodeLabMap;
-   double nodeWidth = 2.0;
-   double arrowSize_1 = 3;  // 0.1;
+                               std::set<team*, teamIdComp>& visitedTeamsAllTasks,
+                               std::vector<std::map<long, double>>& teamUseMapPerTask,
+                               std::vector<int>& steps_per_task)
+{
+    std::filesystem::create_directories("graphs");
 
-   char outputFilename[80];
-   ofstream ofs;
+    // Find root team
+    auto it = team_map_.find(rootTeamId);
+    if (it == team_map_.end()) {
+        std::string msg = "Root team not found: " + std::to_string(rootTeamId);
+        die(__FILE__, __FUNCTION__, __LINE__, msg.c_str());
+    }
+    team* rootTeam = it->second;
 
-   sprintf(outputFilename, "graphs/gv_taskDecomposition_%d%s",
-           (int)rootTeam->id_, ".dot");
-   ofs.open(outputFilename, ios::out);
-   if (!ofs)
-      die(__FILE__, __FUNCTION__, __LINE__, "Can't open file.");
+    std::string outputFilename = "graphs/team_program_listing_" +
+        std::to_string(rootTeam->id_) + ".txt";
+    std::ofstream ofs(outputFilename, std::ios::out);
+    if (!ofs) {
+        std::string msg = "Can't open file: " + outputFilename;
+        die(__FILE__, __FUNCTION__, __LINE__, msg.c_str());
+    }
 
-   ofs << "strict digraph G {" << endl;
-   ofs << "ratio=0.7" << endl;
-   ofs << "root=t_" << rootTeam->id_ << endl;
+    ofs << "==== Tangled Program Graph Listing (root team "
+        << rootTeam->id_ << ") ====" << std::endl
+        << std::endl;
 
-   // teams
-   for (auto tm : visitedTeamsAllTasks) {
-      string col = "";
-      ofs << " t_" << tm->id_ << " [shape=circle, style=wedged, fillcolor=\"";
-      for (int tsk = 0; tsk < GetState("n_task"); tsk++) {
-         ofs << taskCol[tsk] << ";";
-         if (teamUseMapPerTask[tsk].find(tm->id_) !=
-             teamUseMapPerTask[tsk].end()) {
-            ofs << (teamUseMapPerTask[tsk][tm->id_] / steps_per_task[tsk]) /
-                       GetState("n_task");
-         } else {
-            ofs << 0;
-         }
-         if (tsk < GetState("n_task") - 1)
-            ofs << ":";
-      }
-      ofs << "\"";
-      ofs << ", label=\"";
-      if (nodeLabMap.find(tm->id_) == nodeLabMap.end()) {
-         ofs << "";
-      } else {
-         ofs << nodeLabMap[tm->id_];
-      }
-      ofs << "\", fontsize=84, regular=1, width=" << nodeWidth * 2
-          << ",penwidth=0]" << endl;
-   }
-   // team -> team edges
-   for (auto tm : visitedTeamsAllTasks) {
-      // auto mem = tm->members_;
-      for (auto prog : tm->members_) {
-         if (prog->action_ >= 0 &&
-             find(visitedTeamsAllTasks.begin(), visitedTeamsAllTasks.end(),
-                  team_map_[prog->action_]) != visitedTeamsAllTasks.end()) {
-            ofs << " t_" << tm->id_ << "->t_" << prog->action_
-                << " [arrowsize=" << arrowSize_1 << ", penwidth=" << "1"
-                << " color=" << "black" << "];" << endl;
-         }
-      }
-   }
+    for (auto tm : visitedTeamsAllTasks) {
+        ofs << "Team " << tm->id_ << std::endl;
+        ofs << "----------------------------------------" << std::endl;
+        for (auto prog : tm->members_) {
+            ofs << "  Program " << prog->id_
+                << " | init_noise: " << prog->initial_heb_noise_
+                << " | learning_rate: " << prog->learning_rate_
+                << " | ptr: " << prog->action_;
+            if (prog->action_ >= 0 && team_map_.count(prog->action_))
+                ofs << " (Team " << prog->action_ << ")";
+            ofs << std::endl;
+        }
+        ofs << std::endl;
+    }
+}
+// /******************************************************************************/
 
-   // //legend
-   // ofs << "subgraph {" << endl;
-   // ofs << "ratio=1" << endl;
-   // ofs << "rank=sink" << endl;
-   // ofs << "node [shape=plaintext]" << endl;
-   // ofs << "legend [colorscheme=set18," << endl;
-   // ofs << "label=<" << endl;
-   // ofs << "<table border=\"0\" cellborder=\"1\" cellspacing=\"0\">" << endl;
-   // ofs << "<tr><td bgcolor=\"" << taskCol[0] << "\">" << "CartPole" <<
-   // "</td></tr>" << endl; ofs << "<tr><td bgcolor=\"" << taskCol[1] << "\">"
-   // << "Pendulum" << "</td></tr>" << endl; ofs << "<tr><td bgcolor=\"" <<
-   // taskCol[2] << "\">" << "Sunspots" << "</td></tr>" << endl; ofs <<
-   // "<tr><td bgcolor=\"" << taskCol[3] << "\">" << "Mackey-Glass" <<
-   // "</td></tr>" << endl; ofs << "</table>>" << endl; ofs << ", fontsize=84,
-   // regular=1];" << endl; ofs << "}" << endl;
+void TPG::printGraphDotMujoco(long rootTeamId,
+                              std::set<team*>& visited)
+{
+    using std::ostringstream;
+    using std::queue;
 
-   ofs << "}" << endl;
-   ofs.close();
+    std::filesystem::create_directories("graphs");
+
+    std::string outFilename = "graphs/gv_mujoco.dot";
+    std::ofstream ofs(outFilename);
+    if (!ofs) { die(__FILE__, __func__, __LINE__, ("Can't open file: " + outFilename).c_str()); }
+
+    std::string listFilename = "graphs/program_listing.txt";
+    std::ofstream listfs(listFilename);
+    if (!listfs) {
+        die(__FILE__, __func__, __LINE__, ("Can't open file: " + listFilename).c_str());
+    }
+    listfs << "Program listing for root team " << rootTeamId << '\n' << std::endl;
+
+    ofs << "digraph Agent {\n"
+        << "  rankdir = LR;\n"
+        << "  node [fontname = \"Helvetica\", fontsize = 10];\n\n";
+
+    auto writeTeamNode = [&](team* t)
+    {
+        ostringstream lbl;
+        lbl << "{ Team " << t->id_ << " | γ = " << t->decay_factor_ << " }";
+        ofs << "  T" << t->id_ << " [shape=Mrecord, style=filled, fillcolor=\"#c6dbef\", label=\""
+            << lbl.str() << "\", fontsize=36, width=3.5, height=1.6, margin=\"0.30,0.20\", penwidth=2];\n";
+    };
+
+auto writeProgNode = [&](RegisterMachine* p)
+{
+    long vec_dim = 0;
+    long mat_dim = 0;
+
+    // Vector register dimension (per program)
+    if (p->private_memory_.size() > static_cast<size_t>(MemoryEigen::kVectorType_) &&
+        p->private_memory_[MemoryEigen::kVectorType_] != nullptr) {
+        vec_dim = static_cast<long>(
+            p->private_memory_[MemoryEigen::kVectorType_]->memory_size_);
+    }
+
+    // Matrix register dimension (per program) — matrices are mat_dim x mat_dim
+    if (p->private_memory_.size() > static_cast<size_t>(MemoryEigen::kMatrixType_) &&
+        p->private_memory_[MemoryEigen::kMatrixType_] != nullptr) {
+        mat_dim = static_cast<long>(
+            p->private_memory_[MemoryEigen::kMatrixType_]->memory_size_);
+    }
+
+    ofs << "  P" << p->id_
+        << " [shape=record, style=filled, fillcolor=\"#fee0d2\", "
+        << "label=\"{ Program " << p->id_
+        << " | idx=" << p->obs_index_
+        << " | V=" << vec_dim
+        << " | M=" << mat_dim << "x" << mat_dim
+        << " }\", fontsize=20];\n";
+};
+
+    queue<long> toVisit;
+    std::unordered_set<long> printedTeams;
+    std::unordered_set<long> printedProgramNodes;
+    std::unordered_set<long> printedProgramEdges;
+    std::set<std::pair<long,long>> printedTeamProgramEdges;
+    toVisit.push(rootTeamId);
+
+    team* root = team_map_.at(rootTeamId);
+    writeTeamNode(root);
+    printedTeams.insert(rootTeamId);
+    visited.insert(root);
+
+    while (!toVisit.empty()) {
+        long tid = toVisit.front(); toVisit.pop();
+        team* t   = team_map_.at(tid);
+
+        for (auto p : t->members_) {
+            if (printedTeamProgramEdges.insert({tid, p->id_}).second) {
+                ofs << "  T" << tid << " -> P" << p->id_ << " [penwidth=1.8];\n";
+            }
+            if (printedProgramNodes.insert(p->id_).second) {
+                writeProgNode(p);
+            }
+
+            listfs << "Team " << tid
+                   << " | Program " << p->id_
+                   << " | idx=" << p->obs_index_
+                   << " | vec/mat size=" << p->observation_buff_size_
+                   << " -> ";
+            if (p->action_ >= 0) {
+                listfs << "Team " << p->action_;
+            } else {
+                listfs << "Atomic action " << p->action_;
+            }
+            listfs << std::endl;
+
+            if (p->action_ >= 0) {
+                long childId = p->action_;
+                if (printedProgramEdges.insert(p->id_).second) {
+                    ofs << "  P" << p->id_ << " -> T" << childId << " [arrowhead=normal];\n";
+
+                    if (!printedTeams.count(childId)) {
+                        team* child = team_map_.at(childId);
+                        writeTeamNode(child);
+                        printedTeams.insert(childId);
+                    }
+                }
+
+                if (visited.emplace(team_map_.at(childId)).second) {
+                    toVisit.push(childId);
+                }
+            }
+        }
+    }
+
+    ofs << "}\n";
+    ofs.close();
+    listfs.close();
+    {
+        std::string pngFilename = outFilename.substr(0, outFilename.find_last_of('.')) + ".png";
+        std::string cmd = "dot -Tpng " + outFilename + " -o " + pngFilename;
+        std::system(cmd.c_str());
+    }
 }
 
-// /******************************************************************************/
+void TPG::printGraphDotMujocoVisited(long rootTeamId,
+                                     std::set<team*>& visitedTeams)
+{
+    using std::ostringstream;
+
+    std::filesystem::create_directories("graphs");
+
+    std::string outFilename = "graphs/gv_mujoco_visited.dot";
+    std::ofstream ofs(outFilename);
+    if (!ofs)
+        die(__FILE__, __func__, __LINE__,
+            ("Can't open file: " + outFilename).c_str());
+
+    std::string listFilename = "graphs/program_listing_visited.txt";
+    std::ofstream listfs(listFilename);
+    if (!listfs)
+        die(__FILE__, __func__, __LINE__,
+            ("Can't open file: " + listFilename).c_str());
+
+    listfs << "Program listing (visited only) for root team "
+           << rootTeamId << '\n' << std::endl;
+
+    ofs << "digraph Agent {\n"
+        << "  rankdir = LR;\n"
+        << "  node [fontname = \"Helvetica\", fontsize = 10];\n\n";
+
+    auto writeTeamNode = [&](team* t)
+    {
+        ostringstream lbl;
+        lbl << "{ Team " << t->id_
+           << " | γ = " << t->decay_factor_ <<" }";
+        ofs << "  T" << t->id_
+            << " [shape=Mrecord, style=filled, fillcolor=\"#c6dbef\", "
+            << "label=\"" << lbl.str() << "\", fontsize=36, width=3.5, height=1.6, margin=\"0.30,0.20\", penwidth=2];\n";
+    };
+
+    auto writeProgNode = [&](RegisterMachine* p)
+    {
+        ofs << "  P" << p->id_
+            << " [shape=record, style=filled, fillcolor=\"#fee0d2\", "
+            << "label=\"{ Program " << p->id_
+            << " | LR=" << std::fixed << std::setprecision(2)
+            << p->learning_rate_ << " }\", fontsize=20];\n";
+    };
+
+    std::set<team*> vis = visitedTeams;
+    team* root = team_map_.at(rootTeamId);
+    vis.insert(root);
+
+    std::unordered_set<long> printedTeams;
+    std::unordered_set<long> printedProgNodes;
+    std::unordered_set<long> printedProgEdges;
+    std::set<std::pair<long,long>> printedTeamProgramEdges;
+
+    /* Emit team nodes first */
+    for (auto tm : vis) {
+        writeTeamNode(tm);
+        printedTeams.insert(tm->id_);
+    }
+
+    /* Emit program nodes and edges, restricted to the visited subset */
+    for (auto tm : vis) {
+        for (auto p : tm->members_) {
+            if (printedTeamProgramEdges.insert({tm->id_, p->id_}).second) {
+                ofs << "  T" << tm->id_ << " -> P" << p->id_
+                    << " [penwidth=1.8];\n";
+            }
+
+            if (printedProgNodes.insert(p->id_).second)
+                writeProgNode(p);
+
+            listfs << "Team " << tm->id_
+                   << " | Program " << p->id_ << " -> ";
+            if (p->action_ >= 0)
+                listfs << "Team " << p->action_;
+            else
+                listfs << "Atomic action " << p->action_;
+            listfs << std::endl;
+
+            if (p->action_ >= 0 &&
+                printedTeams.count(p->action_) &&
+                printedProgEdges.insert(p->id_).second) {
+                ofs << "  P" << p->id_ << " -> T" << p->action_
+                    << " [arrowhead=normal];\n";
+            }
+        }
+    }
+
+    ofs << "}\n";
+    ofs.close();
+    listfs.close();
+    {
+        std::string pngFilename = outFilename.substr(0, outFilename.find_last_of('.')) + ".png";
+        std::string cmd = "dot -Tpng " + outFilename + " -o " + pngFilename;
+        std::system(cmd.c_str());
+    }
+}
 // void TPG::printGraphDotGPEMAnimate(
 //     long rootTeamId, size_t frame, int episode, int step, size_t depth,
 //     vector<RegisterMachine *> allPrograms, vector<RegisterMachine *> winningPrograms,
@@ -1712,8 +2607,23 @@ void TPG::printPhyloGraphDot(team* tm) {
    ofs.close();
 }
 
+double TPG::ComputeTeamFLOPs(const team* t) {
+    if (!t) return 0.0;
+    double flops_sum = 0.0;
+
+    for (auto* prog : t->members_) {
+      if (!prog) continue;
+      double mat_size = prog->private_memory_[MemoryEigen::kMatrixType_]->memory_size_;
+      for (auto* instr : prog->instructions_effective_) {
+         flops_sum += instruction::GetOperationFLOPs(instr->op_, mat_size);
+      }
+    }
+    return flops_sum;
+}
+
 /******************************************************************************/
 void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long teamId) {
+   (void)multitask;
    team* bestTeam = *(team_pop_.begin());
    if (singleBest && teamId == -1)
       bestTeam = GetBestTeam();
@@ -1808,25 +2718,336 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
                op_countsTally[i] += op_countsSingle[i];
          }
          oss << " nOp " << VectorToString(op_countsTally);
+            // Validation-only, within-generation statistics:
+            // validation fitness vs (effective_registers / total_registers)
+            // across all root teams that were actually validated.
+            double validation_register_efficiency_pearson =
+                std::numeric_limits<double>::quiet_NaN();
+            double validation_register_efficiency_spearman =
+                std::numeric_limits<double>::quiet_NaN();
+            int validation_register_efficiency_n = 0;
+            if (GetState("validation_ran_this_gen") == 1) {
+               const int task = GetState("active_task");
+               const int fitMode = GetState("fitMode");
 
-         // dispatching MTA team information for only multitask events
-         if (multitask) {
-            SelectionMetricsBuilder builder;
-            builder.with_generation(t)
-               .with_best_fitness((*teiter)->GetMeanOutcome(0, 0, 0))
-               .with_team_id((*teiter)->id_)
-               .with_team_size((*teiter)->size())
-               .with_age(t - (*teiter)->gtime_)
-               .with_fitness_value_for_selection((*teiter)->fit_)
-               .with_total_program_instructions(accumulate(programInstructionCounts.begin(),
-                           programInstructionCounts.end(), 0))
-               .with_total_effective_program_instructions(accumulate(effectiveProgramInstructionCounts.begin(),
-                           effectiveProgramInstructionCounts.end(), 0))
-               .with_operations_use(op_countsTally);
+               std::vector<double> fits, props;
+               fits.reserve(GetRootTeamsInVec().size());
+               props.reserve(GetRootTeamsInVec().size());
+               for (auto* tm : GetRootTeamsInVec()) {
+                  if (!tm || tm->numOutcomes(_VALIDATION_PHASE, task) <= 0) continue;
+
+                  const int total_reg = tm->TotalScalarRegisters();
+                  if (total_reg <= 0) continue;
+
+                  const int eff_reg = tm->TotalEffectiveScalarRegisters();
+                  const double validation_fit =
+                      tm->GetMeanOutcome(_VALIDATION_PHASE, task, fitMode);
+
+                  fits.push_back(validation_fit);
+                  props.push_back(static_cast<double>(eff_reg) /
+                                  static_cast<double>(total_reg));
+               }
+
+               const size_t n = fits.size();
+               validation_register_efficiency_n = static_cast<int>(n);
+               if (n >= 2) {
+                  auto pearson = [](const std::vector<double>& xs,
+                                    const std::vector<double>& ys) -> double {
+                     const size_t n = xs.size();
+                     double sum_x = 0.0, sum_y = 0.0, sum_x2 = 0.0, sum_y2 = 0.0, sum_xy = 0.0;
+                     for (size_t i = 0; i < n; i++) {
+                        sum_x += xs[i];
+                        sum_y += ys[i];
+                        sum_x2 += xs[i] * xs[i];
+                        sum_y2 += ys[i] * ys[i];
+                        sum_xy += xs[i] * ys[i];
+                     }
+                     const double nf = static_cast<double>(n);
+                     const double num = nf * sum_xy - sum_x * sum_y;
+                     const double den_x = nf * sum_x2 - sum_x * sum_x;
+                     const double den_y = nf * sum_y2 - sum_y * sum_y;
+                     if (den_x <= 1e-20 || den_y <= 1e-20) {
+                        return std::numeric_limits<double>::quiet_NaN();
+                     }
+                     return num / std::sqrt(den_x * den_y);
+                  };
+
+                  auto average_ranks = [](const std::vector<double>& values) {
+                     std::vector<std::pair<double, size_t>> order;
+                     order.reserve(values.size());
+                     for (size_t i = 0; i < values.size(); i++) {
+                        order.push_back({values[i], i});
+                     }
+                     std::sort(order.begin(), order.end(),
+                               [](const auto& a, const auto& b) { return a.first < b.first; });
+
+                     std::vector<double> ranks(values.size(), 0.0);
+                     size_t i = 0;
+                     while (i < order.size()) {
+                        size_t j = i + 1;
+                        while (j < order.size() && order[j].first == order[i].first) {
+                           j++;
+                        }
+                        const double avg_rank =
+                            (static_cast<double>(i) + static_cast<double>(j - 1)) / 2.0 + 1.0;
+                        for (size_t k = i; k < j; k++) {
+                           ranks[order[k].second] = avg_rank;
+                        }
+                        i = j;
+                     }
+                     return ranks;
+                  };
+
+                  validation_register_efficiency_pearson = pearson(fits, props);
+                  validation_register_efficiency_spearman =
+                      pearson(average_ranks(fits), average_ranks(props));
+               }
+            }
+
+            // Get best agent's register size (total and effective)
+            // This is the same full-task champion whose ID and fitness are
+            // written to the selection row below.
+            team* best_agent = *teiter;
+            const bool self_modifying =
+                std::any_cast<int>(params_["self_modifying"]) != 0;
+            double best_agent_register_size = best_agent ? best_agent->AvgScalarRegsPerProgram() : 0.0;
+            double best_agent_effective_register_size = 0.0;
+            double best_agent_mean_register_similarity = 0.0;
+            double best_agent_max_register_similarity = 0.0;
+            if (best_agent) {
+               int total_effective_regs = 0;
+               double sim_sum = 0.0;
+               double max_sim = 0.0;
+               int prog_count = 0;
+               for (auto* prog : best_agent->members_) {
+                  if (prog) {
+                     total_effective_regs += prog->n_effective_registers_;
+                     double mean_s = prog->ComputeMeanPairwiseRegisterSimilarity();
+                     double max_s = prog->ComputeMaxPairwiseRegisterSimilarity();
+                     sim_sum += mean_s;
+                     if (max_s > max_sim) max_sim = max_s;
+                     prog_count++;
+                  }
+               }
+               best_agent_effective_register_size = static_cast<double>(total_effective_regs);
+               best_agent_mean_register_similarity = prog_count > 0 ? sim_sum / prog_count : 0.0;
+               best_agent_max_register_similarity = max_sim;
+            }
+
+            // Average self-modifying mutation probabilities across the current
+            // training elites. Start rates come from inherited constants;
+            // output rates come from working S2-S6; S6 is the neutral decoy.
+            double elite_avg_start_rate_swap = 0.0;
+            double elite_avg_start_rate_delete = 0.0;
+            double elite_avg_start_rate_add = 0.0;
+            double elite_avg_start_rate_mutate = 0.0;
+            double elite_avg_start_rate_decoy = 0.0;
+            double elite_avg_output_rate_swap = 0.0;
+            double elite_avg_output_rate_delete = 0.0;
+            double elite_avg_output_rate_add = 0.0;
+            double elite_avg_output_rate_mutate = 0.0;
+            double elite_avg_output_rate_decoy = 0.0;
+            int elite_rate_team_count = 0;
+            int elite_decoy_team_count = 0;
+            if (self_modifying) {
+               for (const auto* elite_team : GetRootTeamsInVec()) {
+                  if (!elite_team || !elite_team->elite(_TRAIN_PHASE)) {
+                     continue;
+                  }
+
+                  int team_program_count = 0;
+                  double team_output_swap_sum = 0.0;
+                  double team_output_delete_sum = 0.0;
+                  double team_output_add_sum = 0.0;
+                  double team_output_mutate_sum = 0.0;
+                  double team_output_decoy_sum = 0.0;
+                  double team_start_swap_sum = 0.0;
+                  double team_start_delete_sum = 0.0;
+                  double team_start_add_sum = 0.0;
+                  double team_start_mutate_sum = 0.0;
+                  double team_start_decoy_sum = 0.0;
+                  int team_decoy_program_count = 0;
+                  for (const auto* prog : elite_team->members_) {
+                     if (!prog ||
+                         prog->private_memory_.size() <= MemoryEigen::kScalarType_) {
+                        continue;
+                     }
+                     const auto* scalar_memory =
+                         prog->private_memory_[MemoryEigen::kScalarType_];
+                     if (!scalar_memory ||
+                         scalar_memory->working_memory_.size() <
+                             kSelfModifyingMinScalarRegisters ||
+                         scalar_memory->const_memory_.size() <
+                             kSelfModifyingMinScalarRegisters) {
+                        continue;
+                     }
+                     const double output_swap =
+                         scalar_memory->working_memory_[kSelfModifyingFirstRegister](0, 0);
+                     const double output_delete =
+                         scalar_memory->working_memory_[kSelfModifyingFirstRegister + 1](0, 0);
+                     const double output_add =
+                         scalar_memory->working_memory_[kSelfModifyingFirstRegister + 2](0, 0);
+                     const double output_mutate =
+                         scalar_memory->working_memory_[kSelfModifyingFirstRegister + 3](0, 0);
+                     const double start_swap =
+                         scalar_memory->const_memory_[kSelfModifyingFirstRegister](0, 0);
+                     const double start_delete =
+                         scalar_memory->const_memory_[kSelfModifyingFirstRegister + 1](0, 0);
+                     const double start_add =
+                         scalar_memory->const_memory_[kSelfModifyingFirstRegister + 2](0, 0);
+                     const double start_mutate =
+                         scalar_memory->const_memory_[kSelfModifyingFirstRegister + 3](0, 0);
+                     team_output_swap_sum += SelfModifyingRawTendencyToProbability(output_swap);
+                     team_output_delete_sum += SelfModifyingRawTendencyToProbability(output_delete);
+                     team_output_add_sum += SelfModifyingRawTendencyToProbability(output_add);
+                     team_output_mutate_sum += SelfModifyingRawTendencyToProbability(output_mutate);
+                     team_start_swap_sum += SelfModifyingRawTendencyToProbability(start_swap);
+                     team_start_delete_sum += SelfModifyingRawTendencyToProbability(start_delete);
+                     team_start_add_sum += SelfModifyingRawTendencyToProbability(start_add);
+                     team_start_mutate_sum += SelfModifyingRawTendencyToProbability(start_mutate);
+                     if (scalar_memory->working_memory_.size() >
+                             kSelfModifyingDecoyRegister &&
+                         scalar_memory->const_memory_.size() >
+                             kSelfModifyingDecoyRegister) {
+                        team_output_decoy_sum += SelfModifyingRawTendencyToProbability(
+                            scalar_memory->working_memory_[kSelfModifyingDecoyRegister](0, 0));
+                        team_start_decoy_sum += SelfModifyingRawTendencyToProbability(
+                            scalar_memory->const_memory_[kSelfModifyingDecoyRegister](0, 0));
+                        team_decoy_program_count++;
+                     }
+                     team_program_count++;
+                  }
+                  if (team_program_count > 0) {
+                     elite_avg_output_rate_swap +=
+                         team_output_swap_sum / team_program_count;
+                     elite_avg_output_rate_delete +=
+                         team_output_delete_sum / team_program_count;
+                     elite_avg_output_rate_add +=
+                         team_output_add_sum / team_program_count;
+                     elite_avg_output_rate_mutate +=
+                         team_output_mutate_sum / team_program_count;
+                     elite_avg_start_rate_swap +=
+                         team_start_swap_sum / team_program_count;
+                     elite_avg_start_rate_delete +=
+                         team_start_delete_sum / team_program_count;
+                     elite_avg_start_rate_add +=
+                         team_start_add_sum / team_program_count;
+                     elite_avg_start_rate_mutate +=
+                         team_start_mutate_sum / team_program_count;
+                     elite_rate_team_count++;
+                     if (team_decoy_program_count > 0) {
+                        elite_avg_output_rate_decoy +=
+                            team_output_decoy_sum / team_decoy_program_count;
+                        elite_avg_start_rate_decoy +=
+                            team_start_decoy_sum / team_decoy_program_count;
+                        elite_decoy_team_count++;
+                     }
+                  }
+               }
+            }
+            if (elite_rate_team_count > 0) {
+               elite_avg_start_rate_swap /= elite_rate_team_count;
+               elite_avg_start_rate_delete /= elite_rate_team_count;
+               elite_avg_start_rate_add /= elite_rate_team_count;
+               elite_avg_start_rate_mutate /= elite_rate_team_count;
+               elite_avg_output_rate_swap /= elite_rate_team_count;
+               elite_avg_output_rate_delete /= elite_rate_team_count;
+               elite_avg_output_rate_add /= elite_rate_team_count;
+               elite_avg_output_rate_mutate /= elite_rate_team_count;
+            }
+            if (elite_decoy_team_count > 0) {
+               elite_avg_start_rate_decoy /= elite_decoy_team_count;
+               elite_avg_output_rate_decoy /= elite_decoy_team_count;
+            }
+
+            // Compute NSGA-II Pareto front statistics
+            int pareto_front_0_size = 0;
+            int pareto_front_1_size = 0;
+            double avg_complexity_front_0 = 0.0;
+            int best_agent_pareto_rank = best_agent ? best_agent->pareto_rank_ : -1;
+            double best_agent_crowding_dist = best_agent ? best_agent->crowding_distance_ : 0.0;
             
-            SelectionMetrics metrics = builder.build();
-            EventDispatcher<SelectionMetrics>::instance().notify(EventType::SELECTION, metrics);
-         }
+            // Complexity function (same as in ComputeParetoFronts)
+            auto complexity_for_logging = [](const team* t) -> double {
+               if (!t || t->members_.empty()) return 0.0;
+               double sum = 0.0;
+               for (auto* prog : t->members_) {
+                  if (prog) sum += static_cast<double>(prog->instructions_.size());
+               }
+               double mem_sum = 0.0;
+               for (auto* prog : t->members_) {
+                  if (prog) mem_sum += static_cast<double>(prog->n_memories_);
+               }
+               return sum + 0.3 * mem_sum;
+            };
+            
+            double complexity_sum_front_0 = 0.0;
+            for (auto tm : GetRootTeamsInVec()) {
+               if (tm->pareto_rank_ == 0) {
+                  pareto_front_0_size++;
+                  complexity_sum_front_0 += complexity_for_logging(tm);
+               } else if (tm->pareto_rank_ == 1) {
+                  pareto_front_1_size++;
+               }
+            }
+            if (pareto_front_0_size > 0) {
+               avg_complexity_front_0 = complexity_sum_front_0 / static_cast<double>(pareto_front_0_size);
+            }
+            if (GetState("phase") == _TRAIN_PHASE) {
+               const int task = GetState("active_task");
+               const int fitMode = GetState("fitMode");
+
+               const double train_best_fitness =
+                   (*teiter)->GetMeanOutcome(_TRAIN_PHASE, task, fitMode);
+
+               double validation_fitness = 0.0;
+               if (GetState("validation_ran_this_gen") == 1 &&
+                   (*teiter)->numOutcomes(_VALIDATION_PHASE, task) > 0) {
+                  validation_fitness =
+                      (*teiter)->GetMeanOutcome(_VALIDATION_PHASE, task, fitMode);
+               }
+
+               SelectionMetricsBuilder builder;
+               builder.with_generation(t)
+                   .with_best_fitness(train_best_fitness)
+                   .with_validation_fitness(validation_fitness)
+                   .with_team_id((*teiter)->id_)
+                   .with_team_size((*teiter)->size())
+                   .with_age(t - (*teiter)->gtime_)
+                   .with_fitness_value_for_selection((*teiter)->fit_)
+                   .with_total_program_instructions(accumulate(programInstructionCounts.begin(),
+                                                              programInstructionCounts.end(), 0))
+                   .with_total_effective_program_instructions(accumulate(effectiveProgramInstructionCounts.begin(),
+                                                                        effectiveProgramInstructionCounts.end(), 0))
+                   .with_best_agent_register_size(best_agent_register_size)
+                   .with_best_agent_effective_register_size(best_agent_effective_register_size)
+                   .with_best_agent_flops(best_agent ? TPG::ComputeTeamFLOPs(best_agent) : 0.0)
+                   .with_elite_avg_start_rates(elite_avg_start_rate_swap,
+                                               elite_avg_start_rate_delete,
+                                               elite_avg_start_rate_add,
+                                               elite_avg_start_rate_mutate,
+                                               elite_avg_start_rate_decoy)
+                   .with_elite_avg_output_rates(elite_avg_output_rate_swap,
+                                                elite_avg_output_rate_delete,
+                                                elite_avg_output_rate_add,
+                                                elite_avg_output_rate_mutate,
+                                                elite_avg_output_rate_decoy)
+                   .with_operations_use(op_countsTally)
+                   // NSGA-II Pareto front metrics
+                   .with_pareto_front_0_size(pareto_front_0_size)
+                   .with_pareto_front_1_size(pareto_front_1_size)
+                   .with_best_agent_pareto_rank(best_agent_pareto_rank)
+                   .with_best_agent_crowding_dist(best_agent_crowding_dist)
+                   .with_avg_complexity_front_0(avg_complexity_front_0)
+                   .with_best_agent_mean_register_similarity(best_agent_mean_register_similarity)
+                   .with_best_agent_max_register_similarity(best_agent_max_register_similarity)
+                   .with_validation_register_efficiency_pearson(validation_register_efficiency_pearson)
+                   .with_validation_register_efficiency_spearman(validation_register_efficiency_spearman)
+                   .with_validation_register_efficiency_n(validation_register_efficiency_n);
+
+               SelectionMetrics metrics = builder.build();
+               EventDispatcher<SelectionMetrics>::instance().notify(EventType::SELECTION, metrics);
+            }
 
          vector<int> tmSizesRoot, tmSizesSub;
          tmSizesRoot.push_back((*teiter)->size());
@@ -1837,6 +3058,21 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
                tmSizesSub.push_back((*teiter2)->size());
          oss << " mnTmSzR " << VectorMean<int>(tmSizesRoot) << " mnTmSzS "
              << (tmSizesSub.size() > 0 ? VectorMean<int>(tmSizesSub) : 0);
+
+         // Log NSGA-II Pareto front statistics
+         {
+            int front0_count = 0, front1_count = 0;
+            for (auto tm : GetRootTeamsInVec()) {
+               if (tm->pareto_rank_ == 0) front0_count++;
+               else if (tm->pareto_rank_ == 1) front1_count++;
+            }
+            team* best = GetBestTeam();
+            oss << " pF0 " << front0_count << " pF1 " << front1_count;
+            if (best) {
+               oss << " bestRank " << best->pareto_rank_ 
+                   << " bestCrowd " << std::fixed << std::setprecision(2) << best->crowding_distance_;
+            }
+         }
 
          ////map < int, map< int, map <point *, double, pointLexicalLessThan
          ///> > >
@@ -2031,7 +3267,7 @@ void TPG::RegisterMachineCrossover(RegisterMachine* p1, RegisterMachine* p2,
    c1_instructions.insert(c1_instructions.end(), p1_chunks[2].begin(),
                           p1_chunks[2].end());
    *c1 = new RegisterMachine(p1->action_, c1_instructions, params_, state_,
-                             rngs_[TPG_SEED], _ops);
+                             rngs_[TPG_SEED], _ops, p1->n_memories_);
 
    // Cretae child 2 (c2) from parent chunks {p2-0, p1-1, p2-2}
    std::vector<instruction*> c2_instructions;
@@ -2042,95 +3278,308 @@ void TPG::RegisterMachineCrossover(RegisterMachine* p1, RegisterMachine* p2,
    c2_instructions.insert(c2_instructions.end(), p2_chunks[2].begin(),
                           p2_chunks[2].end());
    *c2 = new RegisterMachine(p2->action_, c2_instructions, params_, state_,
-                             rngs_[TPG_SEED], _ops);
+                             rngs_[TPG_SEED], _ops, p2->n_memories_);
 }
 
-// /******************************************************************************/
-// // Algorithm 5.1 (linear crossover)
-//    void TPG::LinearCrossover(RegisterMachine *gp1,
-//                                    RegisterMachine *gp2,
-//                                    RegisterMachine **c1,
-//                                    RegisterMachine **c2) {
-//    int dcMax = min(gp1->instructions_.size(), gp2->instructions_.size());
-//    int dsMax = dcMax;
-//    int lsMax = dcMax;
-//    int pos1, pos2;
+void TPG::LinearCrossover(RegisterMachine* gp1,
+                          RegisterMachine* gp2,
+                          RegisterMachine** c1,
+                          RegisterMachine** c2) {
+    // =========================================================
+    // Linear Register Crossover (Sorted Index Method)
+    // =========================================================
+    // 1. Identify all unique destination registers in both parents.
+    // 2. Sort them by Index (e.g., R0, R1, R2...).
+    // 3. Cut both parents at a proportional point in their sorted lists.
+    // 4. Merge: Child 1 takes Lower registers from P1 + Upper from P2.
+    //           Child 2 takes Lower registers from P2 + Upper from P1.
 
-//    vector<RegisterMachine *> parents{gp1, gp2};
-//    vector<int> segLengths{1, 1};
+    // 1. Define Module Key (Type + Index)
+    struct ModuleKey {
+        int out_type;
+        int out_idx;
 
-//    if (gp1->instructions_.size() > gp2->instructions_.size()) swap(parents[0], parents[1]);
+        // Strict weak ordering: Sort by Type, then by Index
+        bool operator<(const ModuleKey& o) const {
+            if (out_type != o.out_type) return out_type < o.out_type;
+            return out_idx < o.out_idx;
+        }
+        // Equality check for map/set
+        bool operator==(const ModuleKey& o) const {
+            return out_type == o.out_type && out_idx == o.out_idx;
+        }
+    };
 
-//    // 1
-//    uniform_int_distribution<> dis1(0, parents[0]->instructions_.size() - 1);
-//    pos1 = dis1(rngs_[TPG_SEED]);
-//    uniform_int_distribution<> dis2(0, parents[1]->instructions_.size() - 1);
-//    do {
-//       pos2 = dis2(rngs_[TPG_SEED]);
-//    } while (abs(pos1 - pos2) > min(static_cast<int>(parents[0]->instructions_.size()) - 1, dcMax));
+    // Helper: Extract key from instruction
+    auto get_key = [](instruction* instr, ModuleKey& k_out) -> bool {
+        if (!instr || instr->outIdx_ < 0) return false;
+        k_out = { static_cast<int>(instr->GetOutType()), instr->outIdx_ };
+        return true;
+    };
 
-//    // 2,3
-//    uniform_int_distribution<> dis3(1, min(static_cast<int>(parents[0]->instructions_.size()) - pos1, lsMax));
-//    segLengths[0] = dis3(rngs_[TPG_SEED]);
-//    uniform_int_distribution<> dis4(1, min(static_cast<int>(parents[1]->instructions_.size()) - pos2, lsMax));
-//    do {
-//       segLengths[1] = dis4(rngs_[TPG_SEED]);
-//    } while (abs(segLengths[0] - segLengths[1]) > dsMax);
+    // Helper: Get unique, naturally sorted list of registers (R0, R1, R2...)
+    auto get_sorted_modules = [&](RegisterMachine* p) -> std::vector<ModuleKey> {
+        std::set<ModuleKey> unique_mods;
+        ModuleKey k;
+        for (auto* instr : p->instructions_) {
+            if (get_key(instr, k)) {
+                unique_mods.insert(k);
+            }
+        }
+        // Copy to vector (already sorted by std::set)
+        return std::vector<ModuleKey>(unique_mods.begin(), unique_mods.end());
+    };
 
-//    // 4
-//    if (segLengths[0] > segLengths[1]) swap(segLengths[0], segLengths[1]);
+    const std::vector<ModuleKey> mods1 = get_sorted_modules(gp1);
+    const std::vector<ModuleKey> mods2 = get_sorted_modules(gp2);
 
-//    // 5
-//    if (static_cast<int>(gp1->instructions_.size()) - (segLengths[1] - segLengths[0]) < 1 ||
-//        static_cast<int>(gp2->instructions_.size()) + (segLengths[1] - segLengths[0]) >
-//            GetParam<int>("max_prog_size")) {
-//       if (real_dist_(rngs_[TPG_SEED]) < 0.5)
-//          segLengths[1] = segLengths[0];
-//       else
-//          segLengths[0] = segLengths[1];
+    // Fallback: Clone if too small to cut
+    if (mods1.size() < 2 || mods2.size() < 2) {
+        *c1 = new RegisterMachine(gp1->action_, gp1->instructions_, params_, state_, rngs_[TPG_SEED], _ops, gp1->n_memories_);
+        *c2 = new RegisterMachine(gp2->action_, gp2->instructions_, params_, state_, rngs_[TPG_SEED], _ops, gp2->n_memories_);
+        return;
+    }
 
-//       if (pos1 + segLengths[0] > static_cast<int>(gp1->instructions_.size()))
-//          segLengths[0] = segLengths[1] = gp1->instructions_.size() - pos1;
-//    }
+    // 2. Calculate Cut Points
+    // We pick a cut relative to the smallest parent to ensure validity.
+    const std::size_t min_sz = std::min(mods1.size(), mods2.size());
+    std::uniform_int_distribution<int> disCut(1, static_cast<int>(min_sz) - 1);
+    
+    const int raw_cut = disCut(rngs_[TPG_SEED]); 
+    const double cut_fraction = static_cast<double>(raw_cut) / static_cast<double>(min_sz);
 
-//    vector<instruction *> parentProg1 = gp1->instructions_;
-//    vector<instruction *> parentProg2 = gp2->instructions_;
+    // Project cut fraction onto both parents
+    auto get_cut_idx = [cut_fraction](size_t size) -> int {
+        int cut = static_cast<int>(std::lround(cut_fraction * static_cast<double>(size)));
+        return std::clamp(cut, 1, static_cast<int>(size) - 1);
+    };
 
-//    vector<instruction *> childProg1 = gp1->instructions_;
-//    vector<instruction *> childProg2 = gp2->instructions_;
+    const int cut1 = get_cut_idx(mods1.size());
+    const int cut2 = get_cut_idx(mods2.size());
 
-//    // // exchange seg1 in gp1 by seg2 in gp2
-//    // childProg1.clear();
-//    // auto start = parentProg1.begin();
-//    // auto end = parentProg1.begin() + pos1;
-//    // std::copy(start, end, back_inserter(childProg1));
-//    // start = parentProg2.begin() + pos2;
-//    // end = parentProg2.begin() + pos2 + segLengths[1];
-//    // std::copy(start, end, back_inserter(childProg1));
-//    // start = parentProg1.begin() + pos1 + segLengths[0];
-//    // end = parentProg1.end();
-//    // std::copy(start, end, back_inserter(childProg1));
+    // 3. Build Ownership Maps (Map Module -> Parent ID 0 or 1)
+    using OwnerMap = std::map<ModuleKey, int>;
 
-//    // cerr << "dbg sz " << childProg1.size() << ":";
-//    // for (auto i : childProg1) {
-//    //    cerr << " " << i->memIndices_;
-//    // }
+    auto build_ownership = [&](const std::vector<ModuleKey>& lower_list,
+                               const std::vector<ModuleKey>& upper_list,
+                               int lower_pid, int upper_pid) -> OwnerMap {
+        OwnerMap owner;
+        // Lower block (e.g., R0...Rk) comes from lower_pid
+        for (const auto& k : lower_list) owner[k] = lower_pid;
+        
+        // Upper block (e.g., Rk+1...Rn) comes from upper_pid
+        // Conflict resolution: If a register exists in both lists (unlikely in sorted split, 
+        // but safe to check), prefer the Lower parent.
+        for (const auto& k : upper_list) {
+            if (owner.find(k) == owner.end()) {
+                owner[k] = upper_pid;
+            }
+        }
+        return owner;
+    };
 
-//    // // exchange seg2 in gp2 by seg1 in gp1
-//    // childProg2.clear();
-//    // start = parentProg2.begin();
-//    // end = parentProg2.begin() + pos2;
-//    // copy(start, end, back_inserter(childProg2));
-//    // start = parentProg1.begin() + pos1;
-//    // end = parentProg1.begin() + pos1 + segLengths[0];
-//    // copy(start, end, back_inserter(childProg2));
-//    // start = parentProg2.begin() + pos2 + segLengths[1];
-//    // end = parentProg2.end();
-//    // copy(start, end, back_inserter(childProg2));
+    // Split lists
+    std::vector<ModuleKey> p1_lower(mods1.begin(), mods1.begin() + cut1);
+    std::vector<ModuleKey> p1_upper(mods1.begin() + cut1, mods1.end());
+    std::vector<ModuleKey> p2_lower(mods2.begin(), mods2.begin() + cut2);
+    std::vector<ModuleKey> p2_upper(mods2.begin() + cut2, mods2.end());
 
-//    *c1 = new RegisterMachine(gp1->action_, childProg1, params_, state_, rngs_[TPG_SEED], _ops);
-//    *c2 = new RegisterMachine(gp2->action_, childProg2, params_, state_, rngs_[TPG_SEED], _ops);
+    // Child 1: P1 Lower + P2 Upper
+    OwnerMap owner_c1 = build_ownership(p1_lower, p2_upper, 0, 1);
+    // Child 2: P2 Lower + P1 Upper
+    OwnerMap owner_c2 = build_ownership(p2_lower, p1_upper, 1, 0);
+
+    // 4. Construct Child Instructions (Zipper Merge)
+    auto build_prog = [&](RegisterMachine* p1, RegisterMachine* p2,
+                          const OwnerMap& ownership,
+                          std::vector<instruction*>& out_prog) {
+        out_prog.clear();
+        size_t n1 = p1->instructions_.size();
+        size_t n2 = p2->instructions_.size();
+        size_t i = 0, j = 0;
+
+        auto norm = [](size_t idx, size_t total) {
+            return (total <= 1) ? 0.0 : static_cast<double>(idx) / (total - 1);
+        };
+
+        ModuleKey k;
+        while (i < n1 || j < n2) {
+            // Normalized positions for merge sort
+            double t1 = (i < n1) ? norm(i, n1) : 1e100;
+            double t2 = (j < n2) ? norm(j, n2) : 1e100;
+
+            bool take_p1 = (t1 <= t2);
+            instruction* instr = take_p1 ? p1->instructions_[i++] : p2->instructions_[j++];
+            int origin_pid = take_p1 ? 0 : 1;
+
+            if (get_key(instr, k)) {
+                auto it = ownership.find(k);
+                // Keep instruction ONLY if its destination is owned by the parent it came from
+                if (it != ownership.end() && it->second == origin_pid) {
+                    out_prog.push_back(instr);
+                }
+            }
+        }
+    };
+
+    std::vector<instruction*> c1_instrs, c2_instrs;
+    build_prog(gp1, gp2, owner_c1, c1_instrs);
+    build_prog(gp1, gp2, owner_c2, c2_instrs);
+
+    *c1 = new RegisterMachine(gp1->action_, c1_instrs, params_, state_, rngs_[TPG_SEED], _ops, gp1->n_memories_);
+    *c2 = new RegisterMachine(gp2->action_, c2_instrs, params_, state_, rngs_[TPG_SEED], _ops, gp2->n_memories_);
+}
+
+// void TPG::LinearCrossover(RegisterMachine* gp1,
+//                           RegisterMachine* gp2,
+//                           RegisterMachine** c1,
+//                           RegisterMachine** c2) {
+//     // =========================================================
+//     // Linear Register Crossover (Per-Register 50/50)
+//     // =========================================================
+//     // For each destination register index up to the maximum index used
+//     // across BOTH parents (per register type), randomly decide which
+//     // parent "owns" that register in each child (50/50).
+//     //
+//     // Edge case: if a register is only present in one parent (extra
+//     // register in the longer parent), keep it in a child with a
+//     // "biological" retention probability (default 0.5), otherwise drop it.
+
+//     // 1) Define Module Key (Type + Index)
+//     struct ModuleKey {
+//         int out_type;
+//         int out_idx;
+
+//         bool operator<(const ModuleKey& o) const {
+//             if (out_type != o.out_type) return out_type < o.out_type;
+//             return out_idx < o.out_idx;
+//         }
+//         bool operator==(const ModuleKey& o) const {
+//             return out_type == o.out_type && out_idx == o.out_idx;
+//         }
+//     };
+
+//     // Helper: Extract key from instruction
+//     auto get_key = [](instruction* instr, ModuleKey& k_out) -> bool {
+//         if (!instr || instr->outIdx_ < 0) return false;
+//         k_out = { static_cast<int>(instr->GetOutType()), instr->outIdx_ };
+//         return true;
+//     };
+
+//     // 2) Gather which destination registers are actually used in each parent
+//     auto get_used_set = [&](RegisterMachine* p) -> std::set<ModuleKey> {
+//         std::set<ModuleKey> used;
+//         ModuleKey k;
+//         for (auto* instr : p->instructions_) {
+//             if (get_key(instr, k)) used.insert(k);
+//         }
+//         return used;
+//     };
+
+//     const std::set<ModuleKey> used1 = get_used_set(gp1);
+//     const std::set<ModuleKey> used2 = get_used_set(gp2);
+
+//     // If neither parent uses any destination register (unlikely), clone.
+//     if (used1.empty() && used2.empty()) {
+//         *c1 = new RegisterMachine(gp1->action_, gp1->instructions_, params_, state_, rngs_[TPG_SEED], _ops);
+//         *c2 = new RegisterMachine(gp2->action_, gp2->instructions_, params_, state_, rngs_[TPG_SEED], _ops);
+//         return;
+//     }
+
+//     // 3) Compute max index per type across both parents
+//     std::map<int, int> max_idx_per_type;
+//     for (const auto& k : used1) {
+//         auto it = max_idx_per_type.find(k.out_type);
+//         if (it == max_idx_per_type.end()) max_idx_per_type[k.out_type] = k.out_idx;
+//         else it->second = std::max(it->second, k.out_idx);
+//     }
+//     for (const auto& k : used2) {
+//         auto it = max_idx_per_type.find(k.out_type);
+//         if (it == max_idx_per_type.end()) max_idx_per_type[k.out_type] = k.out_idx;
+//         else it->second = std::max(it->second, k.out_idx);
+//     }
+
+//     // 4) Build ownership maps (Module -> parent id) for each child
+//     //    ownership[k] == 0 => keep only if instruction comes from gp1
+//     //    ownership[k] == 1 => keep only if instruction comes from gp2
+//     //    ownership[k] == -1 => dropped (no parent owns it in that child)
+//     using OwnerMap = std::map<ModuleKey, int>;
+//     OwnerMap owner_c1;
+//     OwnerMap owner_c2;
+
+//     std::uniform_real_distribution<double> dis01(0.0, 1.0);
+
+//     // "Biological" retention probability for registers that only exist
+//     // in one parent (extra registers from the longer parent).
+//     // If you want to tune later, wire this to params_.
+//     const double p_keep_extra = 0.5;
+
+//     for (const auto& pr : max_idx_per_type) {
+//         const int out_type = pr.first;
+//         const int max_idx  = pr.second;
+
+//         for (int idx = 0; idx <= max_idx; ++idx) {
+//             ModuleKey k{out_type, idx};
+//             const bool in1 = (used1.find(k) != used1.end());
+//             const bool in2 = (used2.find(k) != used2.end());
+
+//             if (in1 && in2) {
+//                 // 50/50 assignment, complementary across children
+//                 const bool pick_p1 = (dis01(rngs_[TPG_SEED]) < 0.5);
+//                 owner_c1[k] = pick_p1 ? 0 : 1;
+//                 owner_c2[k] = pick_p1 ? 1 : 0;
+//             } else if (in1 || in2) {
+//                 // Only present in one parent: keep with retention probability
+//                 const int pid = in1 ? 0 : 1;
+
+//                 owner_c1[k] = (dis01(rngs_[TPG_SEED]) < p_keep_extra) ? pid : -1;
+//                 owner_c2[k] = (dis01(rngs_[TPG_SEED]) < p_keep_extra) ? pid : -1;
+//             }
+//             // else: present in neither parent (within range) => ignore
+//         }
+//     }
+
+//     // 5) Construct child instructions using a normalized zipper-merge.
+//     //    Keep an instruction only if its destination register is owned by
+//     //    the parent it came from in that child.
+//     auto build_prog = [&](RegisterMachine* p1, RegisterMachine* p2,
+//                           const OwnerMap& ownership,
+//                           std::vector<instruction*>& out_prog) {
+//         out_prog.clear();
+//         const size_t n1 = p1->instructions_.size();
+//         const size_t n2 = p2->instructions_.size();
+//         size_t i = 0, j = 0;
+
+//         auto norm = [](size_t idx, size_t total) {
+//             return (total <= 1) ? 0.0 : static_cast<double>(idx) / (total - 1);
+//         };
+
+//         ModuleKey k;
+//         while (i < n1 || j < n2) {
+//             const double t1 = (i < n1) ? norm(i, n1) : 1e100;
+//             const double t2 = (j < n2) ? norm(j, n2) : 1e100;
+
+//             const bool take_p1 = (t1 <= t2);
+//             instruction* instr = take_p1 ? p1->instructions_[i++] : p2->instructions_[j++];
+//             const int origin_pid = take_p1 ? 0 : 1;
+
+//             if (get_key(instr, k)) {
+//                 auto it = ownership.find(k);
+//                 if (it != ownership.end() && it->second >= 0 && it->second == origin_pid) {
+//                     out_prog.push_back(instr);
+//                 }
+//             }
+//         }
+//     };
+
+//     std::vector<instruction*> c1_instrs, c2_instrs;
+//     build_prog(gp1, gp2, owner_c1, c1_instrs);
+//     build_prog(gp1, gp2, owner_c2, c2_instrs);
+
+//     *c1 = new RegisterMachine(gp1->action_, c1_instrs, params_, state_, rngs_[TPG_SEED], _ops);
+//     *c2 = new RegisterMachine(gp2->action_, c2_instrs, params_, state_, rngs_[TPG_SEED], _ops);
 // }
+
 
 /******************************************************************************/
 // Read in populations from a checkpoint file.
@@ -2145,11 +3594,23 @@ void TPG::ReadCheckpoint(long t, int phase, bool fromString,
    } else {
       char filename[80];
       sprintf(filename, "%s.%ld.%lu.%d.rslt", "checkpoints/cp",
-           t, seeds_[TPG_SEED], phase);        
+           t, seeds_[TPG_SEED], phase);
       ifstream t(filename);
+      if (!t.is_open() || !t.good()) {
+         std::cerr << "ReadCheckpoint: cannot open file: " << filename
+                   << " (check that checkpoint exists and path is correct)"
+                   << std::endl;
+         die(__FILE__, __FUNCTION__, __LINE__, "Checkpoint file not found.");
+      }
       t.seekg(0, ios::end);
-      str.reserve(t.tellg());
+      auto size = t.tellg();
       t.seekg(0, ios::beg);
+      if (size <= 0) {
+         std::cerr << "ReadCheckpoint: file is empty or invalid: " << filename
+                   << std::endl;
+         die(__FILE__, __FUNCTION__, __LINE__, "Checkpoint file is empty.");
+      }
+      str.reserve(static_cast<size_t>(size));
       str.assign((istreambuf_iterator<char>(t)), istreambuf_iterator<char>());
    }
 
@@ -2164,7 +3625,20 @@ void TPG::ReadCheckpoint(long t, int phase, bool fromString,
       if (oneline.size() == 0)
          continue;
       auto outcome_fields = SplitString(oneline, ':');
-
+      // if (outcome_fields[0] == "weights") {
+      //    long teamId = atol(outcome_fields[1].c_str());
+      //    long prevProgID = atol(outcome_fields[2].c_str());
+      //    long currProgID = atol(outcome_fields[3].c_str());
+      //    double weightValue = atof(outcome_fields[4].c_str());
+         
+      //    team* targetTeam = _teamMap[teamId];
+      //    if (targetTeam) {
+      //       if (targetTeam->HebbianMap.weights.find(prevProgID) == targetTeam->HebbianMap.weights.end()) {
+      //             targetTeam->HebbianMap.weights[prevProgID] = std::map<long, double>();
+      //       }
+      //       targetTeam->HebbianMap.weights[prevProgID][currProgID] = weightValue;
+      //    }
+      // }
       if (outcome_fields[0].compare("t") == 0)
          state_["t_current"] = atoi(outcome_fields[1].c_str());
       else if (outcome_fields[0].compare("active_task") == 0)
@@ -2190,7 +3664,10 @@ void TPG::ReadCheckpoint(long t, int phase, bool fromString,
          if (id > max_teamCount)
             max_teamCount = id;
          long gtime = atoi(outcome_fields[f++].c_str());
-         m = new team(gtime, id);
+         int obs_index = atoi(outcome_fields[f++].c_str());
+         double lambda_td = atof(outcome_fields[f++].c_str());
+         double decay_factor = atof(outcome_fields[f++].c_str());
+         m = new team(gtime, id, obs_index, lambda_td, decay_factor);
          m->_n_eval = atoi(outcome_fields[f++].c_str());
          // add programs in order
          for (size_t ii = f; ii < outcome_fields.size(); ii++) {
@@ -2247,6 +3724,7 @@ void TPG::recalculateProgramRefs() {
       for (auto p : tm->members_)
          p->nrefs_++;
 }
+
 
 /******************************************************************************/
 void TPG::SanityCheck() {
@@ -2655,6 +4133,87 @@ void TPG::EncodeEvalResultString(EvalData& eval_data) {
    eval_data.eval_result += "\n";
 }
 
+void TPG::AppendSelfModifyingRates(std::string& result,
+                                   std::vector<team*>& teams) {
+   if (std::any_cast<int>(params_["self_modifying"]) == 0) return;
+
+   set<team*, teamIdComp> visited_teams;
+   set<RegisterMachine*, RegisterMachineIdComp> programs;
+   for (auto* tm : teams) {
+      if (tm) tm->GetAllNodes(team_map_, visited_teams, programs);
+   }
+
+   for (auto* prog : programs) {
+      if (!prog) continue;
+      auto* scalar_memory = prog->private_memory_[MemoryEigen::kScalarType_];
+      if (!scalar_memory ||
+          scalar_memory->working_memory_.size() < kSelfModifyingMinScalarRegisters) {
+         continue;
+      }
+
+      result += "R:" + to_string(static_cast<long>(prog->id_));
+      const size_t last_reg = kSelfModifyingDecoyRegister;
+      for (size_t reg = kSelfModifyingFirstRegister; reg <= last_reg; ++reg) {
+         double v = scalar_memory->working_memory_[reg](0, 0);
+         v = std::isfinite(v) ? v : 0.0;
+         result += ":" + to_string(v);
+      }
+      result += "\n";
+   }
+}
+
+void TPG::LogReplaySelfModifyingRates(const EvalData& eval_data) {
+   if (GetParam<int>("replay") == 0 ||
+       std::any_cast<int>(params_["self_modifying"]) == 0 ||
+       eval_data.tm == nullptr) {
+      return;
+   }
+
+   set<team*, teamIdComp> visited_teams;
+   set<RegisterMachine*, RegisterMachineIdComp> programs;
+   eval_data.tm->GetAllNodes(team_map_, visited_teams, programs);
+
+   double start[4] = {0.0, 0.0, 0.0, 0.0};
+   double output[4] = {0.0, 0.0, 0.0, 0.0};
+   size_t count = 0;
+   for (auto* prog : programs) {
+      if (!prog) continue;
+      auto* memory = prog->private_memory_[MemoryEigen::kScalarType_];
+      if (!memory ||
+          memory->const_memory_.size() < kSelfModifyingMinScalarRegisters ||
+          memory->working_memory_.size() < kSelfModifyingMinScalarRegisters) {
+         continue;
+      }
+      for (size_t rate = 0; rate < kSelfModifyingRegisterCount; ++rate) {
+         const size_t reg = kSelfModifyingFirstRegister + rate;
+         start[rate] += SanitizeSelfModifyingRawTendency(
+             memory->const_memory_[reg](0, 0));
+         output[rate] += SanitizeSelfModifyingRawTendency(
+             memory->working_memory_[reg](0, 0));
+      }
+      ++count;
+   }
+   if (count == 0) return;
+
+   std::filesystem::create_directories("logs/misc");
+   std::ostringstream filename;
+   filename << "logs/misc/mutation_rates." << seeds_[TPG_SEED] << "."
+            << static_cast<long>(eval_data.tm->id_) << ".csv";
+   const bool first_row = eval_data.episode == 0 && eval_data.timestep == 1;
+   std::ofstream out(filename.str(), first_row ? std::ios::trunc : std::ios::app);
+   if (!out) return;
+   if (first_row) {
+      out << "episode,timestep,program_count,start_swap,output_swap,"
+             "start_delete,output_delete,start_add,output_add,"
+             "start_mutate,output_mutate\n";
+   }
+   out << eval_data.episode << ',' << eval_data.timestep << ',' << count;
+   for (size_t rate = 0; rate < 4; ++rate) {
+      out << ',' << start[rate] / count << ',' << output[rate] / count;
+   }
+   out << '\n';
+}
+
 /******************************************************************************/
 void TPG::DecodeEvalResultString(std::string& s) {
    string line;
@@ -2665,6 +4224,24 @@ void TPG::DecodeEvalResultString(std::string& s) {
       vector<double> r_stats_double;
       vector<int> r_stats_int;
       SplitString(line, ':', split_str);
+      if (!split_str.empty() && split_str[0] == "R" && split_str.size() > 2) {
+         long prog_id = atol(split_str[1].c_str());
+         auto prog_it = program_pop_.find(prog_id);
+         if (prog_it != program_pop_.end() && prog_it->second) {
+            auto* scalar_memory =
+                prog_it->second->private_memory_[MemoryEigen::kScalarType_];
+            if (scalar_memory) {
+               for (size_t k = 2; k < split_str.size(); ++k) {
+                  const size_t reg = k - 1;  // split_str[2] -> working S1
+                  if (reg < scalar_memory->working_memory_.size()) {
+                     scalar_memory->working_memory_[reg](0, 0) =
+                         atof(split_str[k].c_str());
+                  }
+               }
+            }
+         }
+         continue;
+      }
       size_t s = 0;
       long rslt_id = atol(split_str[s++].c_str());
       string fingerprint = split_str[s++].c_str();
@@ -2735,6 +4312,10 @@ EvalData TPG::InitEvalData() {
    eval_data.animate = GetParam<int>("animate") == 1;
    eval_data.partially_observable = GetParam<int>("partially_observable") == 1;
    eval_data.n_prediction = 0;
+   // IMPORTANT: timestep is used by RegisterMachine execution (e.g., temporal indexing).
+   // It must be initialized deterministically.
+   eval_data.timestep = 0;
+   eval_data.sample = 0;
    eval_data.verbose = false;
    return eval_data;
 }

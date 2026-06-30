@@ -36,6 +36,8 @@ void TrainingRunner::trainingLoop() {
    auto startReport = chrono::system_clock::now();
    chrono::duration<double> endReport;
 
+   tpg_.InitMapElitesArchive();
+   
    while (tpg_.GetState("t_current") <= tpg_.GetParam<int>("n_generations")) {
       tpg_.phylo_graph_.clear();  // TODO(skelly): add switch for phylo
 
@@ -67,6 +69,44 @@ void TrainingRunner::trainingLoop() {
          evaluate_main(tpg_, world_, tasks_, taskIndices_);
       }
       endEval = chrono::system_clock::now() - startEval;
+      tpg_.state_["validation_ran_this_gen"] = 0;
+      {
+         const int t = tpg_.GetState("t_current");
+         const int t_start = tpg_.GetState("t_start");
+         const bool not_first_generation = (t > t_start);
+
+         const int test_mod =
+             (tpg_.HaveParam("test_mod") ? tpg_.GetParam<int>("test_mod") : 0);
+         const int validation_mod =
+             (tpg_.HaveParam("validation_mod") ? tpg_.GetParam<int>("validation_mod")
+                                               : 0);
+
+         bool do_test = (test_mod > 0) && not_first_generation && (t % test_mod == 0);
+         // If we're testing, we must validate first (test uses validation champions).
+         bool do_validation =
+             ((validation_mod > 0) && not_first_generation && (t % validation_mod == 0)) ||
+             do_test;
+
+         if (do_validation) {
+            tpg_.oss << "validate t " << t << " mod " << (validation_mod > 0 ? validation_mod : test_mod)
+                     << " n_eval_validation " << tasks_[0]->GetNumEval(_VALIDATION_PHASE)
+                     << std::endl;
+            tpg_.state_["phase"] = _VALIDATION_PHASE;
+            evaluate_main(tpg_, world_, tasks_, taskIndices_);
+            tpg_.SetEliteTeams(tasks_);
+            tpg_.state_["validation_ran_this_gen"] = 1;
+         }
+
+         if (do_test) {
+            tpg_.oss << "test t " << t << " mod " << test_mod
+                     << " n_eval_test " << tasks_[0]->GetNumEval(_TEST_PHASE)
+                     << std::endl;
+            tpg_.state_["phase"] = _TEST_PHASE;
+            evaluate_main(tpg_, world_, tasks_, taskIndices_);
+            tpg_.SetEliteTeams(tasks_);
+         }
+         tpg_.state_["phase"] = _TRAIN_PHASE;
+      }
 
       // Selection ///////////////////////////////////////////////////
       startSetEliteTeams = chrono::system_clock::now();
@@ -78,27 +118,16 @@ void TrainingRunner::trainingLoop() {
 
       // Accounting and reporting ////////////////////////////////////
       startReport = chrono::system_clock::now();
-      if (tpg_.GetParam<int>("test_mod") != 0 &&
-          tpg_.GetState("t_current") % tpg_.GetParam<int>("test_mod") == 0) {
-         // validation
-         tpg_.state_["phase"] = _VALIDATION_PHASE;
-         evaluate_main(tpg_, world_, tasks_, taskIndices_);
-         tpg_.SetEliteTeams(tasks_);
-
-         // test
-         tpg_.state_["phase"] = _TEST_PHASE;
-         evaluate_main(tpg_, world_, tasks_, taskIndices_);
-         tpg_.SetEliteTeams(tasks_);
-
-         tpg_.state_["phase"] = _TRAIN_PHASE;
-      }
       endReport = chrono::system_clock::now() - startReport;
 
       /* MODES
             * *************************************************************/
       startMODES = chrono::system_clock::now();
+      const int modes_mod = tpg_.HaveParam("modes_mod")
+          ? tpg_.GetParam<int>("modes_mod")
+          : 1000000000;
       if (tpg_.GetState("t_current") == tpg_.GetState("t_start") ||
-          tpg_.GetState("t_current") % MODES_T == 0)
+          (modes_mod > 0 && tpg_.GetState("t_current") % modes_mod == 0))
          tpg_.updateMODESFilters(true);
       endMODES = chrono::system_clock::now() - startMODES;
 
@@ -162,12 +191,18 @@ void TrainingRunner::trainingLoop() {
       EventDispatcher<TimingMetrics>::instance().notify(EventType::TMS,
                                                         metrics);
 
-      startGen = chrono::system_clock::now();
-      if (tpg_.GetState("t_current") % PRINT_MOD == 0)
-         tpg_.printOss();
-      tpg_.SanityCheck();
-      tpg_.state_["t_current"]++;
-   }
+        startGen = chrono::system_clock::now();
+        if (tpg_.GetState("t_current") % PRINT_MOD == 0)
+            tpg_.printOss();   
+        tpg_.SanityCheck();
+
+        if (tpg_.GetState("t_current") != 0 &&
+            tpg_.GetState("t_current") % tpg_.GetParam<int>("extinction_event_occurance") == 0) {
+            tpg_.ExtinctionEvent();
+        }
+        tpg_.state_["t_current"]++;
+
+    }
 }
 
 // void TrainingRunner::logGenerationMetrics() {

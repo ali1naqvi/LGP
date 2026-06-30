@@ -13,6 +13,7 @@ class Mujoco_Humanoid_Standup_v4 : public MujocoEnv {
       n_eval_validation_ = std::any_cast<int>(params["mj_n_eval_validation"]);
       n_eval_test_ = std::any_cast<int>(params["mj_n_eval_test"]);
       max_step_ = std::any_cast<int>(params["mj_max_timestep"]);
+      max_sim_steps_ = max_step_ * frame_skip_;
       model_path_ =
           ExpandEnvVars(std::any_cast<string>(params["mj_model_path"]) +
                         "humanoid_standup.xml");
@@ -36,12 +37,15 @@ class Mujoco_Humanoid_Standup_v4 : public MujocoEnv {
 #endif
    }
 
-   bool terminal() { return step_ >= max_step_; }
+   bool terminal() { return time_limit_reached(); }
 
    Results sim_step(std::vector<double>& action) {
+      auto pos_before = d_->qpos[2];
       do_simulation(action, frame_skip_);
       auto pos_after = d_->qpos[2];
-      auto uph_cost = (pos_after - 0) / m_->opt.timestep;
+      // Match Gymnasium: dt = model timestep * frame_skip.
+      const double dt = m_->opt.timestep * std::max(1, frame_skip_);
+      auto uph_cost = (pos_after - pos_before) / dt;
 
       double ctrl_square_sum = 0;
       double cfrc_ext_square_sum = 0;
@@ -89,7 +93,7 @@ class Mujoco_Humanoid_Standup_v4 : public MujocoEnv {
                       cvel_size + qfrc_size);
    }
 
-   void reset(mt19937& rng) {
+   void reset(mt19937& rng, int& episode_number) {
       double c = 0.01;
 
       std::uniform_real_distribution<> dis_pos(-c, c);
@@ -106,6 +110,7 @@ class Mujoco_Humanoid_Standup_v4 : public MujocoEnv {
       mj_resetData(m_, d_);
       set_state(qpos, qvel);
       step_ = 0;
+      sim_steps_elapsed_ = 0;
       get_obs(state_);
    }
 };

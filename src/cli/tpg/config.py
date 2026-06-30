@@ -1,5 +1,6 @@
 import os
 import glob
+import re
 
 def generate_key_from_filename(filename):
     """
@@ -16,7 +17,7 @@ def generate_key_from_filename(filename):
         name = name[len(prefix):]
 
     # Return the cleaned-up, lower-case key
-    return name.lower()
+    return re.sub(r"\s+", "", name).lower()
 
 
 def create_hyper_param_mapping(tpg_env_var):

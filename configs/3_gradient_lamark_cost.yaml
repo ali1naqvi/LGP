@@ -1,0 +1,285 @@
+# Experiment Tracking Parameters
+experiment_tracking:
+  track_experiments: 0  # Whether to track experiments in comet
+  experiment_key: "7ac170bcf3e64f6fb3a29646c316ba7e"  # Comet experiment key
+  track_mod: 20  # How frequently to track experiment metrics (in generations)
+
+# Experiment Type Parameters
+experiment_type:
+  replay: 0  # Re-evaluate an individual from a checkpoint file
+  id_to_replay: 0  # ID of the individual to replay from checkpoint file
+  task_to_replay: 0  # Index in active_tasks list starting at 0
+  animate: 0  # Re-evaluate an individual from a checkpoint file and animate behaviour, if available
+# GA Parameters
+ga_parameters:
+  start_from_checkpoint: 0  # Whether to start from a checkpoint file
+  checkpoint_in_t: 0  # Generation of the checkpoint file
+  checkpoint_in_phase: 2  # 0: Training, 1: Validation, 2: Test
+  save_champ_checkpoints: 0  # 0: Training phase, 1: Validation phase, 2: Test phase
+  write_train_checkpoints: 1  # Whether to save training checkpoints at each generation
+  write_phylogeny: 0  # Save phylogenetic data
+  test_mod: 0  # How frequently to run test procedure
+  n_fit_mode: 1  # Number of fitness functions available
+  fit_mode: 0  # Which fitness function to use, range is [0, n_fit_mode)
+  seed_tpg: 42  # Main seed for evolution
+  seed_aux: 42  # Auxiliary seed, e.g. for simulators
+  n_generations: 10000  # Max number of generations
+  n_root: 1000 # Number of root teams (agents) to keep each generation
+  n_root_gen: 200  # Number of new root teams to create each generation
+  map_elites: 0
+  map_elites_param: "lambda_decay"
+  save_me_generationally: 0
+  parent_select_roots_only: 0  # Whether to constrain parent selection to root teams
+  tournament_size: 3  # Tournament size for selection
+  shadow_run: 0  # Randomly select training survivors (uses seed_tpg)
+  keep_old_outcomes: 1  # Whether to keep evaluation outcome over time or re-evaluate each generation
+  seed_with_episode_number: 0  # Whether to seed the environment with the episode number
+  extinction_event_occurance: 1000000000 #TODO(ali): not working as of rn
+  extinction_percentage: 0 #percent to keep during extinction event
+  validation_mod: 0
+  test_mod: 0
+  modes_mod: 500  # Run MODES diagnostics every 500 generations (0 keeps only the initial baseline)
+  pareto_objectives: "flops"
+  # flops
+  # bool use_flops = (objectives_str.find("flops") != std::string::npos);
+  # bool use_total_instructions = (objectives_str.find("total_instructions") != std::string::npos);
+  # bool use_effective_instructions = (objectives_str.find("effective_instructions") != std::string::npos);
+  # bool use_total_registers = (objectives_str.find("total_registers") != std::string::npos);
+  # bool use_effective_registers = (objectives_str.find("effective_registers") != std::string::npos);
+# Team Parameters
+team_parameters:
+  min_initial_team_size: 1
+  max_initial_team_size: 1  # Initial team size
+  max_team_size: 1  # Max team size
+
+# Independent Team Mutation Ops
+independent_team_mutation_ops:
+  pmx: 0.0  # Team variation: probability of team crossover
+  pmx_p: 0.0  # Team variation: probability of team crossover adding each parent prog to child
+  pmd: 0.0 # Team variation: probability of deleting program from team
+  pma: 0.0  # Team variation: probability of adding program to team
+  pmw: 0.0  # Team variation: probability of mutating program execution order
+  pml: 0.0  # Team variation: probability of mutating lambda
+  pmdf: 0.0 # Team variation: probability of mutating decay factor
+
+# Program Parameters
+program_parameters:
+  p_clone_program: 1.0  # Probability of cloning program before modifying
+  p_crossover: 0.0
+  pmn: 0.0  # Probability of mutating a program's action pointer
+  p_atomic: 0.0  # Probability of selecting atomic action when changing action pointer
+  p_instructions_mutate: 0.1  # Initial S4 point-mutation probability
+  p_instructions_swap: 0.1  # Probability of swapping the position of two instructions
+  p_instructions_delete: 0.1  # Probability of deleting an instruction
+  p_instructions_add: 0.1  # Probability of adding an instruction
+  n_mutation_passes: 1  # Number of stacked mutation passes per selected program
+  self_modifying: 1  # Use S2-S5 as swap/delete/add/point-mutation probabilities
+  evolve_self_modifying_constants: 1  # 0 keeps inherited S2-S6 constants fixed and disables Lamarckian write-back
+  reset_self_modifying_before_mutation: 0  # 0: parent outputs drive mutation, then reset; 1: reset constants first
+  lamarkism_evolved_constants: 1  # Inherit final S2-S5 outputs as offspring starting constants
+  operations_additive: 0  # Make every instruction add its result to the destination register
+
+  p_memory_mu_const: 0.25  # Probability of mutating constants
+  p_observation_buff_size: 0.01 # Program variation: probability of changing observation_buff_size
+
+  p_observation_index: 0.00 # Program variation: probability of changing observation_index
+  p_memory_size: 0.0 # Program variation: probability of changing memory_size
+
+  p_memory_slots: 0.0 # Program variation: probability of changing memory slots
+  stateful: 1 # Use stateful programs
+  skip_introns: 1  # Whether to skip introns during evaluation
+  continuous_output: 1  # Enable continuous outputs: 0 (disabled), 1 (scalar), 2 (vector), 3 (matrix)
+  n_input: "0"  # Number of inputs (FastSim sets obs size internally)
+  min_prog_size: 1
+  min_initial_prog_size: 1
+  max_initial_prog_size: 25  # Max initial program size
+  max_prog_size: 50000  # Max program size
+
+  memory_size: 1  # Dimensionality for vector & matrix memory
+  min_memory_size: 1  # Minimum memory size
+  max_memory_size: 1  # Maximum memory size
+
+  gene_clone: 0
+  min_initial_mem_slots: 8
+  max_initial_mem_slots: 8
+  min_memory_slots: 8  # Minimum memory size
+  max_memory_slots: 8  # Maximum memory size (keep bounded to avoid OOM)
+  p_hidden_stateful_mutation: 0.00 # Mutate stateful/stateless flags for all registers, including action registers
+
+  # Observations are stored in a buffer with this time window
+  observation_buff_size: 1
+  min_observation_buff_size: 1
+  max_observation_buff_size: 1
+
+  #Linear Genetic Programming rather than
+  use_all_scalar_registers: 0 #whether to use all scalars for the action (LGP-style optimization)
+  dynamic_lgp: 0 #use coordination
+  matrix_modulation: 0 #turning this on allows M0 to be the modulation and the coordination to be emergent
+
+
+# General Task Parameters
+general_task_parameters:
+  # Which tasks are active
+  active_tasks: "FastSimGradient"  # Right-hand-side should be a single task name or a comma-separated list
+  partially_observable: 0  # Use the partially-observable version of a task, if available
+  activation_function: 2
+  n_discrete_action: 5  # Action 0 is no-op; actions 1-4 are relative directions
+
+# Parameters Specific to Recursive Forecasting
+recursive_forecasting:
+  forecast_fitness: "mse"  # Fitness function: "mse", "correlation", "theils", "pearson"
+  forecast_discrete: 0  # Whether to use discrete actions for forecasting
+  forecast_normalize_data: 1  # Whether to normalize forecasting dataset in [0,1]
+  forecast_prime_steps: 50  # Number of prime steps
+  forecast_horizon_train: 50  # Forecasting horizon during training
+  forecast_horizon_val: 100  # Forecasting horizon during validation
+  forecast_horizon_test: 100  # Forecasting horizon during testing
+  forecast_n_eval_train: 20  # Number of evaluations for training
+  forecast_n_eval_val: 10  # Number of evaluations for validation
+  forecast_n_eval_test: 10
+# Parameters Specific to Ali's experimental tests.
+hebbian_parameters:
+  probabilistic_bid: 0 # this is only for sub-teams for now (since reward modulation is only here)
+  team_obs_size: 0
+  hebb_learning: 0
+  homeostatic_root: 0
+  post_connection: 0
+  debug_map: 0
+  reset_per_episode: 0
+
+  static_learning_rate: 0.0
+
+  mut_learning_rate: 0.0
+
+TD_parameters:
+  smoothing_factor: 0.02
+  lambda_td: 0.0 # lambda being 0.0 means evolution. Other values means evolved with that value.
+  decay_factor: 0.0 # disc_factor being 0.0 means evolution. Other values means evolved with that value.
+  additive_root: 0 #this is to make the root gated or not (0 makes it gated)
+  additive_sub_team: 0 #this is to make the sub_teams gated or not (0 makes it gated)
+
+
+  homeostatic_TD: "none" #td learning on homeo. Options: none, step, episodic
+  td_subteam: 0
+
+# Parameters Specific to Mujoco
+mujoco_parameters:
+  mj_model_path: "$TPG/datasets/mujoco_models/"  # Model path
+  mj_max_timestep: 200  # Max simulation time steps
+  mj_reward_control_weight: 0.0
+  mj_n_eval_train: 50  # Number of training evaluations
+  mj_n_eval_validation: 0  # Number of validation evaluations
+  mj_n_eval_test: 0  # Number of test evaluations
+
+  mj_break_leg_ant: 0.0
+  mj_damage_progression_rate: 0.0
+  mj_linear_damage: 0
+  mj_observable_damage: 0
+
+# Parameters Specific to the Gradient (chemotaxis) task
+gradient_parameters:
+  gradient_model_path: "$TPG/datasets/maze_models/"  # Directory containing gradient.xml
+  gradient_max_timestep: 200  # Max simulation time steps per episode
+  gradient_n_eval_train: 5  # Number of training evaluations
+  gradient_n_eval_validation: 0  # Number of validation evaluations
+  gradient_n_eval_test: 1  # Number of test evaluations (replay uses TEST phase; must be >=1 to render a video)
+  gradient_sticky_walls: 0
+  gradient_discrete: 1   # 1: discrete no-op + 4-direction actions; 0: continuous (turn/drive)
+  gradient_multi_output: 1 # 1: single scalar action; >1: take N sequential actions from vector register 1 (N = vector dim)
+  gradient_multi_output_dynamic: 0 # 1: use one sequential action per current vector-memory dimension
+  gradient_reward_obs: 0 # 1: expose previous-step collected energy (normalised) as an extra obs
+  gradient_obs_noise: 0.0     # Std-dev of Gaussian sensory noise on the perceived concentration (0 = noiseless)
+  gradient_obs_noise_cue: 0   # 1: expose the current noise level as an extra observation channel
+
+  gradient_peak_height: 80.0  # Concentration at the peak
+  gradient_spread: 30.0       # Logical distance at which the cone falls to 0
+  gradient_plateau: -1.0      # Radius of a flat top (<0 => pure cone)
+  gradient_grid_size: 60.0    # Logical grid units spanning the arena width
+  gradient_n_peaks: 1         # 1: original centred peak; >1: one global plus lower local optima
+  gradient_depletable: 1      # 1: collected concentration is removed until the next episode
+  gradient_extraction_rate: 0.05 # Fraction of remaining local resource consumed per timestep
+
+  gradient_perlin_noise: 0       # 0: normal cone; 1: independent full-arena Perlin landscape
+  gradient_perlin_scale: 8     # Logical units per base noise period (larger = broader features)
+  gradient_perlin_strength: 1.2 # Landscape contrast around half the peak height
+  gradient_perlin_octaves: 4     # Number of fractal noise layers (1-12)
+
+  gradient_save_image: 0
+  gradient_save_summed_image: 0
+  gradient_save_video: 0
+
+# Operations (set 1 to activate, 0 to deactivate)
+operations:
+  # Scalar Operations:
+  SCALAR_SUM_OP: 1
+  SCALAR_DIFF_OP: 1
+  SCALAR_PRODUCT_OP: 1
+  SCALAR_DIVISION_OP: 1
+  SCALAR_ABS_OP: 1
+  SCALAR_RECIPROCAL_OP: 1
+  SCALAR_SIN_OP: 1
+  SCALAR_COS_OP: 1
+  SCALAR_ARCSIN_OP: 1
+  SCALAR_ARCCOS_OP: 1
+  SCALAR_ARCTAN_OP: 1
+  SCALAR_HEAVYSIDE_OP: 1
+  SCALAR_CONDITIONAL_OP: 1
+  SCALAR_POW_OP: 1
+  SCALAR_TANH_OP: 1
+  SCALAR_SQRT_OP: 1
+  SCALAR_CONST_SET_OP: 1
+  SCALAR_MIN_OP: 1
+  SCALAR_MAX_OP: 1
+  SCALAR_ACCUM_OP: 1
+  # SCALAR_TAN_OP: 1
+  # SCALAR_EXP_OP: 1
+  # SCALAR_LOG_OP: 1
+  # SCALAR_SQR_OP: 1
+  # SCALAR_CUBE_OP: 1
+
+  # # # Vector Operations:
+  # VECTOR_HEAVYSIDE_OP: 1
+  # MATRIX_HEAVYSIDE_OP: 1
+  # SCALAR_VECTOR_PRODUCT_OP: 1
+  # SCALAR_BROADCAST_OP: 1
+  # VECTOR_RECIPROCAL_OP: 1
+  # VECTOR_NORM_OP: 1
+  # VECTOR_ABS_OP: 1
+  # VECTOR_SUM_OP: 1
+  # VECTOR_ACCUM_OP: 1
+  # VECTOR_DIFF_OP: 1
+  # VECTOR_PRODUCT_OP: 1
+  # VECTOR_DIVISION_OP: 1
+  # VECTOR_INNER_PRODUCT_OP: 1
+  # VECTOR_MIN_OP: 1
+  # VECTOR_MAX_OP: 1
+  # VECTOR_MEAN_OP: 1
+  # VECTOR_ST_DEV_OP: 1
+  # VECTOR_CONST_SET_OP: 1
+  # SCALAR_VECTOR_ASSIGN_OP: 1
+
+  # # Matrix Operations:
+  # VECTOR_OUTER_PRODUCT_OP: 1
+  # SCALAR_MATRIX_PRODUCT_OP: 1
+  # MATRIX_RECIPROCAL_OP: 1
+  # MATRIX_VECTOR_PRODUCT_OP: 1
+  # VECTOR_COLUMN_BROADCAST_OP: 1
+  # VECTOR_ROW_BROADCAST_OP: 1
+  # MATRIX_NORM_OP: 1
+  # MATRIX_COLUMN_NORM_OP: 1
+  # MATRIX_ROW_NORM_OP: 1
+  # MATRIX_TRANSPOSE_OP: 1
+  # MATRIX_ABS_OP: 1
+  # MATRIX_SUM_OP: 1
+  # MATRIX_DIFF_OP: 1
+  # MATRIX_PRODUCT_OP: 1
+  # MATRIX_DIVISION_OP: 1
+  # MATRIX_MATRIX_PRODUCT_OP: 1
+  # MATRIX_MIN_OP: 1
+  # MATRIX_MAX_OP: 1
+  # MATRIX_MEAN_OP: 1
+  # MATRIX_ROW_MEAN_OP: 1
+  # MATRIX_ROW_ST_DEV_OP: 1
+  # MATRIX_ST_DEV_OP: 1
+  # MATRIX_CONST_SET_OP: 1
+  # SCALAR_MATRIX_ASSIGN_OP: 1

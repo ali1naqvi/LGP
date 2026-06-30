@@ -18,11 +18,14 @@ class Mujoco_Half_Cheetah_v4 : public MujocoEnv {
       n_eval_validation_ = std::any_cast<int>(params["mj_n_eval_validation"]);
       n_eval_test_ = std::any_cast<int>(params["mj_n_eval_test"]);
       max_step_ = std::any_cast<int>(params["mj_max_timestep"]);
+      // Match Gymnasium HalfCheetah-v4 default.
+      frame_skip_ = 5;
+      max_sim_steps_ = max_step_ * frame_skip_;
       control_cost_weight_ =
           std::any_cast<double>(params["mj_reward_control_weight"]);
       model_path_ =
           ExpandEnvVars(std::any_cast<string>(params["mj_model_path"]) + 
-                        "half_cheetah.xml");                 
+                        "half_cheetah.xml");
       initialize_simulation();
       obs_size_ = 17;
       if (!exclude_current_positions_from_observation_)
@@ -52,13 +55,15 @@ class Mujoco_Half_Cheetah_v4 : public MujocoEnv {
       return control_cost_weight_ * cost;
    }
 
-   bool terminal() { return step_ >= max_step_; }
+   bool terminal() { return time_limit_reached(); }
 
    Results sim_step(std::vector<double>& action) {
       auto x_pos_before = d_->qpos[0];
       do_simulation(action, frame_skip_);
       auto x_pos_after = d_->qpos[0];
-      auto x_vel = (x_pos_after - x_pos_before) / m_->opt.timestep;
+      // Match Gymnasium: dt = model timestep * frame_skip.
+      const double dt = m_->opt.timestep * std::max(1, frame_skip_);
+      auto x_vel = (x_pos_after - x_pos_before) / dt;
 
       auto ctrl_cost = control_cost(action);
 
@@ -84,7 +89,7 @@ class Mujoco_Half_Cheetah_v4 : public MujocoEnv {
       }
    }
 
-   void reset(mt19937& rng) {
+   void reset(mt19937& rng, int& episode_number) {
       std::uniform_real_distribution<> dis_pos(-reset_noise_scale_,
                                                reset_noise_scale_);
       std::vector<double> qpos(m_->nq);
@@ -99,6 +104,7 @@ class Mujoco_Half_Cheetah_v4 : public MujocoEnv {
       mj_resetData(m_, d_);
       set_state(qpos, qvel);
       step_ = 0;
+      sim_steps_elapsed_ = 0;
       get_obs(state_);
    }
 };

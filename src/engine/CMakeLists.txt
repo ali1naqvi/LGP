@@ -39,3 +39,9 @@ target_link_libraries(engine
 set_target_properties(engine PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
 ) 
+
+target_link_libraries(engine
+  PUBLIC
+    libfastsim 
+    env_fastsim 
+)

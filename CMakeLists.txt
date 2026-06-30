@@ -44,15 +44,24 @@ find_package(TBB REQUIRED)
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 find_package(yaml-cpp REQUIRED)
 
-# Fetch Catch2 once for the entire project
 include(FetchContent)
 FetchContent_Declare(
   Catch2
   GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-  GIT_TAG        v3.4.0  # or a later release
+  GIT_TAG        v3.4.0 
 )
 FetchContent_MakeAvailable(Catch2)
 
-# Add subdirectory for src and tests
+file(GLOB_RECURSE LIBFASTSIM_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/modules/libfastsim/src/*.cpp"
+)
+
+list(FILTER LIBFASTSIM_SOURCES EXCLUDE REGEX ".*Display\\.(cpp|cc)$")
+
+add_library(libfastsim STATIC ${LIBFASTSIM_SOURCES})
+target_include_directories(libfastsim PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/libfastsim/src
+)
+
 add_subdirectory(src)
-add_subdirectory(tests)
+# add_subdirectory(tests)

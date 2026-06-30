@@ -61,8 +61,8 @@ inline void mouse_button(GLFWwindow* window, int button, int act, int mods) {
     button_right =
         (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS);
 
-    // update mouse position
-    glfwGetCursorPos(window, &lastx, &lasty);
+   // update mouse position
+   glfwGetCursorPos(window, &lastx, &lasty);
 }
 
 // mouse move callback
@@ -72,32 +72,32 @@ inline void mouse_move(GLFWwindow* window, double xpos, double ypos) {
         return;
     }
 
-    // compute mouse displacement, save
-    double dx = xpos - lastx;
-    double dy = ypos - lasty;
-    lastx = xpos;
-    lasty = ypos;
+   // compute mouse displacement, save
+   double dx = xpos - lastx;
+   double dy = ypos - lasty;
+   lastx = xpos;
+   lasty = ypos;
 
-    // get current window size
-    int width, height;
-    glfwGetWindowSize(window, &width, &height);
+   // get current window size
+   int width, height;
+   glfwGetWindowSize(window, &width, &height);
 
-    // get shift key state
-    bool mod_shift = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
-                      glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS);
+   // get shift key state
+   bool mod_shift = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+                     glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS);
 
-    // determine action based on mouse button
-    mjtMouse action;
-    if (button_right) {
-        action = mod_shift ? mjMOUSE_MOVE_H : mjMOUSE_MOVE_V;
-    } else if (button_left) {
-        action = mod_shift ? mjMOUSE_ROTATE_H : mjMOUSE_ROTATE_V;
-    } else {
-        action = mjMOUSE_ZOOM;
-    }
+   // determine action based on mouse button
+   mjtMouse action;
+   if (button_right) {
+      action = mod_shift ? mjMOUSE_MOVE_H : mjMOUSE_MOVE_V;
+   } else if (button_left) {
+      action = mod_shift ? mjMOUSE_ROTATE_H : mjMOUSE_ROTATE_V;
+   } else {
+      action = mjMOUSE_ZOOM;
+   }
 
-    // move camera
-    mjv_moveCamera(m, action, dx / height, dy / height, &scn, &cam);
+   // move camera
+   mjv_moveCamera(m, action, dx / height, dy / height, &scn, &cam);
 }
 
 // scroll callback
@@ -265,18 +265,32 @@ inline void MaybeAnimateStep(TPG& tpg) {
 /******************************************************************************/
 inline void EvalMujoco(TPG& tpg, EvalData& eval_data) {
    MujocoEnv* task = dynamic_cast<MujocoEnv*>(eval_data.task);
-   task->reset(tpg.rngs_[AUX_SEED]);
+   task->reset(tpg.rngs_[AUX_SEED], eval_data.episode);
+   eval_data.running_mean = 0.0;
    MaybeStartAnimation(tpg, task, eval_data);
    MaybeAnimateStep(tpg);
    eval_data.n_prediction = 0;
    eval_data.obs = new state(task->GetObsSize());
    eval_data.obs->Set(task->GetObsVec(eval_data.partially_observable));
    while (!task->terminal()) {
-      tpg.GetAction(eval_data);  
-      auto ctrl = WrapVectorActionMuJoco(eval_data);
-      TaskEnv::Results r = task->sim_step(ctrl);
-      eval_data.stats_double[REWARD1_IDX] += r.r1;  
-      eval_data.AccumulateStepData();
+      tpg.GetAction(
+          eval_data, tpg.rngs_[AUX_SEED],
+          tpg.params_, tpg.prev_prog_history_);
+      if (std::any_cast<int>(tpg.params_["use_all_scalar_registers"]) == 0){  
+        auto ctrl = WrapVectorActionMuJoco(eval_data);          
+        TaskEnv::Results r = task->sim_step(ctrl);
+        eval_data.stats_double[REWARD1_IDX] += r.r1;  
+        eval_data.AccumulateStepData();
+        tpg.ComputeIndReward(eval_data, tpg.params_, r.r1*10);
+         }
+      else{
+        auto ctrl = WrapScalarActionsMujoco(eval_data);
+        TaskEnv::Results r = task->sim_step(ctrl);
+        eval_data.stats_double[REWARD1_IDX] += r.r1;  
+        eval_data.AccumulateStepData();
+        tpg.ComputeIndReward(eval_data, tpg.params_, r.r1*10);
+         }
+        
       eval_data.obs->Set(task->GetObsVec(eval_data.partially_observable));
       MaybeAnimateStep(tpg);
    }

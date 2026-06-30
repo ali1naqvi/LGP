@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<fastsim>
+  <display enable="false"/>
+  <!-- empty bounded arena: only a thin border wall, no interior obstacles -->
+  <map name="$TPG/datasets/maze_models/empty_arena.pbm" size="600"/>
+  <robot x="300" y="300" theta="0" diameter="10"/>
+</fastsim>

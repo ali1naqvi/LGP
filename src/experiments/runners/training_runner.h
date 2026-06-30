@@ -9,7 +9,6 @@
 #define PRINT_MOD 1
 #define NUM_POINT_AUX_DOUBLE 3
 #define NUM_POINT_AUX_INT 4
-#define MODES_T 1000000000
 
 class TaskEnv;
 

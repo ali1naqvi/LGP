@@ -104,8 +104,34 @@ def plot(ctx: click.Context, env: str, csv_files: str, column_name: str):
 @click.option("-s", "--seed", help="Random seed")
 @click.option("--seed-aux", help="Auxillary seed", default=42)
 @click.option("-t", "--task-to-replay", help="Task to replay for multitask", default=0)
+@click.option(
+    "--n-eval-test",
+    type=int,
+    default=None,
+    help="Override the active task's *_n_eval_test for replay.",
+)
+@click.option(
+    "--match-train-eval-count/--no-match-train-eval-count",
+    default=False,
+    help="If set, reads the active task's *_n_eval_train and sets *_n_eval_test to match it.",
+)
+@click.option(
+    "--seed-with-episode-number",
+    type=int,
+    default=None,
+    help="Override seed_with_episode_number for replay (0/1).",
+)
 @click.pass_context
-def replay(ctx: click.Context, env: str, seed: int, seed_aux: int, task_to_replay: int):
+def replay(
+    ctx: click.Context,
+    env: str,
+    seed: int,
+    seed_aux: int,
+    task_to_replay: int,
+    n_eval_test: int,
+    match_train_eval_count: bool,
+    seed_with_episode_number: int,
+):
     """Replay the best performing policy for the given environment"""
     
     # Fetch the hyperparameters for the environment
@@ -148,10 +174,25 @@ def replay(ctx: click.Context, env: str, seed: int, seed_aux: int, task_to_repla
         checkpoint_in_phase, checkpoint_in_t = helpers.get_checkpoint_values(int(file_seed))
         
         # Build replay command
+        # TODO(ALI): animate is set to 1 
+        #change to animation here if video needs to be created
+        replay_overrides = []
+        train_eval_param, test_eval_param = helpers.get_replay_eval_param_names(
+            hyper_parameters[env], int(task_to_replay)
+        )
+        if match_train_eval_count:
+            train_eval = helpers.get_int_param_from_yaml_file(hyper_parameters[env], train_eval_param)
+            replay_overrides.append(f"{test_eval_param}={train_eval}")
+        elif n_eval_test is not None:
+            replay_overrides.append(f"{test_eval_param}={n_eval_test}")
+
+        if seed_with_episode_number is not None:
+            replay_overrides.append(f"seed_with_episode_number={int(seed_with_episode_number)}")
+
         cmd = [
             "mpirun", 
             "--oversubscribe",
-            "-np", str(1),
+            "-np", str(12),
             executable,
             f"parameters_file={hyper_parameters[env]}",
             f"seed_tpg={file_seed}",
@@ -163,19 +204,21 @@ def replay(ctx: click.Context, env: str, seed: int, seed_aux: int, task_to_repla
             f"animate=1",
             f"id_to_replay={int(metrics['team_id'])}",
             f"task_to_replay={task_to_replay}"
-        ]
+        ] + replay_overrides
         
         stdout_file = f"logs/misc/tpg.{file_seed}.{seed_aux}.replay.std"
         stderr_file = f"logs/misc/tpg.{file_seed}.{seed_aux}.replay.err"
         
         click.echo(f"\nReplaying from file: {filename} ({i}/{len(csv_files)})")
         click.echo(f"Fitness: {metrics['best_fitness']}, Generation: {metrics['generation']}, Team ID: {metrics['team_id']}")
+        if replay_overrides:
+            click.echo(f"Replay overrides: {' '.join(replay_overrides)}")
         
         click.echo(f"Launching MPI run with command:\n{' '.join(cmd)}")
         click.echo(f"Output will be written to {stdout_file} (stdout) and {stderr_file} (stderr).")
         
         try:
-            with open(stdout_file, 'w') as stdout, open(stderr_file, 'w') as stderr:
+            with open(stdout_file, 'a') as stdout, open(stderr_file, 'a') as stderr:
                 click.echo(f"Running replay for seed {file_seed}... (waiting for completion)")
                 # Use subprocess.run() to wait for completion instead of Popen
                 result = subprocess.run(cmd, stdout=stdout, stderr=stderr)
@@ -224,59 +267,43 @@ def kill(ctx: click.Context, env : str):
         click.echo("Successfully killed processes.")
     except Exception as e:
         click.echo(f"Unexpected error: {e}")
-
+        
 @click.command(help="Debug a given environment")
 @click.argument("env")
 @click.option("-s", "--seed", help="Random seed", default=42)
 @click.option("--seed-aux", help="Auxillary seed", default=42)
 @click.pass_context
-def debug(ctx: click.Context, env: str, seed : int, seed_aux : int):
-    """Debug a given environment"""
+def debug(ctx: click.Context, env: str, seed: int, seed_aux: int):
+    """Debug a given environment without using xterm"""
     
     # Fetch the hyperparameters for the environment
     hyper_parameters = ctx.obj["hyper_parameters"]
     TPG = ctx.obj["tpg"]
     
     env_dir = helpers.create_environment_directories(TPG, env)
-    
-    # Change working directory to environment directory
     os.chdir(env_dir)
     
     executable = os.path.join(TPG, "build", "release", "experiments", "TPGExperimentMPI")
     
-    # Build debugs command
+    # Create a GDB command script file
+    with open("gdb_commands.txt", "w") as f:
+        f.write(f"run parameters_file={hyper_parameters[env]} seed_tpg={seed} seed_aux={seed_aux} n_root=10 n_root_gen=10\n")
+        f.write("bt full\n")
+        f.write("info locals\n")
+    
+    # Build command using gdb directly with command file
     cmd = [
         "mpirun", 
         "--oversubscribe",
         "-np", str(2),
-        "xterm",
-        "-hold",
-        "-e",
         "gdb",
-        "-ex",
-        "run",
-        "--args",
-        executable,
-        f"parameters_file={hyper_parameters[env]}",
-        f"seed_tpg={42}",
-        f"n_root=10", 
-        f"n_root_gen=10",
+        "-x", "gdb_commands.txt",
+        executable
     ]
-        
-    stdout_file = f"logs/misc/tpg.{seed}.{seed_aux}.replay.std"
-    stderr_file = f"logs/misc/tpg.{seed}.{seed_aux}.replay.err"
-        
-    click.echo(f"Launching MPI run with command:\n{' '.join(cmd)}")
-    click.echo(f"Output will be written to {stdout_file} (stdout) and {stderr_file} (stderr).")
+    
+    click.echo(f"Launching debug with command:\n{' '.join(cmd)}")
     
     try:
-        with open(stdout_file, 'w') as stdout, open(stderr_file, 'w') as stderr:
-            click.echo(f"Running debug for seed {seed_aux}...")
-            # Use subprocess.run() to wait for completion instead of Popen
-            result = subprocess.run(cmd, stdout=stdout, stderr=stderr)
-            if result.returncode != 0:
-                click.echo(f"Warning: Process for seed {seed_aux} exited with code {result.returncode}")
-            else:
-                click.echo(f"Debug for seed {seed_aux} completed successfully")
-    except OSError as e:
+        subprocess.run(cmd)
+    except Exception as e:
         raise click.ClickException(f"Failed to start debug: {e}")

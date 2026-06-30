@@ -4,7 +4,7 @@ mkdir -p logs
 
 # Default command line args
 mode=0 #Train:0, Replay:1, Debug:2
-animate=1
+animate=0
 num_mpi_proc=2
 seed_tpg=42
 seed_aux=42
@@ -105,7 +105,7 @@ fi
 
 # Debug mode ###################################################################
 if [ $mode -eq 2 ]; then
-   mpirun --oversubscribe -np $num_mpi_proc xterm -hold -e gdb -ex run \
+   mpirun --oversubscribe -np $num_mpi_proc gdb -ex run \
      --args $TPG/build/release/experiments/TPGExperimentMPI \
      parameters_file=${parameters_file} \
      seed_tpg=${seed_tpg} n_root=10 n_root_gen=10 \

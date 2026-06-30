@@ -16,6 +16,8 @@ file(GLOB EXPERIMENTS_SOURCES
     *.cc
     *.h
     ../environments/*.cc
+    ../environments/fastsim/*.cc
+    ../environments/fastsim/*.h
     ../environments/*.h
     ../environments/mujoco/MujocoEnv.h
     runners/*.cc
@@ -23,7 +25,6 @@ file(GLOB EXPERIMENTS_SOURCES
     evaluators/EvalData.cc
     evaluators/EvalData.h
 )
-
 # Create the TPGExperimentMPI executable
 add_executable(TPGExperimentMPI ${EXPERIMENTS_SOURCES})
 

@@ -4,7 +4,11 @@
 # cpus anywhere
 #SBATCH --ntasks=21               
 #SBATCH --mem-per-cpu=6G      
-#SBATCH --time=0-24:00  # time (DD-HH:MM)
+#SBATCH --time=0-12:00  # time (DD-HH:MM)
+
+#SBATCH --mail-user=alinaqvi8014@gmail.com
+#SBATCH --mail-type=BEGIN,END,FAIL
+
 
 mkdir -p checkpoints
 mkdir -p logs

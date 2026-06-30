@@ -87,8 +87,11 @@ class instruction {
    static const int SCALAR_VECTOR_ASSIGN_OP_ = 70;
    static const int SCALAR_MATRIX_ASSIGN_OP_ = 71;
    static const int OBS_BUFF_SLICE_OP_ = 72;
+   static const int SCALAR_ACCUM_OP_ = 73;
+   static const int VECTOR_ACCUM_OP_ = 74;
 
-   static const int NUM_OP = 73;
+   static const int NUM_OP = 75;
+
 
    mt19937 rng_;
 
@@ -97,11 +100,13 @@ class instruction {
    // Whether in1 is a memory or input reference
    // 0: memory ref
    // 1: observation ref
+   // 2: const memory ref
    int in1Src_ = 0;
 
    // Whether in2 is a memory or input reference
    // 0: memory ref
    // 1: observation ref
+   // 2: const memory ref
    int in2Src_ = 0;
 
    // Which memory index does this instruction write to
@@ -149,11 +154,12 @@ class instruction {
 
    static int GetOpCodeFromName(const std::string& name);
    static vector<std::string> op_names_;
+   static double GetOperationFLOPs(int op, int memory_size);
 
    string ToString();
 
    // Constructor
-   instruction(std::unordered_map<string, std::any>&, mt19937&);
+   instruction(std::unordered_map<string, std::any>&, mt19937&, int n_memories);
 
    // Copy Constructor
    instruction(instruction&);
@@ -227,8 +233,22 @@ class instruction {
    inline bool IsObs(int i) const {
       return (GetInType(i) != -1) && (i == 0 ? in1Src_ == 1 : in2Src_ == 1);
    }
+   inline bool IsConstRef(int i) const {
+      return (GetInType(i) != -1) && (i == 0 ? in1Src_ == 2 : in2Src_ == 2);
+   }
    inline bool IsMemoryRef(int i) const {
       return !IsObs(i) && GetInType(i) != -1;
+   }
+   inline const MatrixDynamic& InputMemory(int in) const {
+      const MemoryEigen* input_memory = GetInMem(in);
+      const size_t idx = static_cast<size_t>(GetInIdxE(in));
+      return IsConstRef(in) ? input_memory->const_memory_[idx]
+                            : input_memory->working_memory_[idx];
+   }
+   inline const MatrixDynamic& InputMemoryAt(int in, size_t idx) const {
+      const MemoryEigen* input_memory = GetInMem(in);
+      return IsConstRef(in) ? input_memory->const_memory_[idx]
+                            : input_memory->working_memory_[idx];
    }
    void Mutate(bool randomize, vector<bool>& legal_ops,
                int observation_buff_size, mt19937& rng);
@@ -245,11 +265,12 @@ class instruction {
          // TODO (skelly): should this also be range limited to memory_size?
          *scalar = obs->stateValueAtIndex(*index % obs->dim_);
       } else {
-         MemoryEigen* input_memory = in == 0 ? in1_ : in2_;
-         *scalar =
-             input_memory->working_memory_[*index % GetInMem(in)->n_memories_](
-                 0, 0);
+         *scalar = InputMemoryAt(
+             in, static_cast<size_t>(*index % GetInMem(in)->n_memories_))(0, 0);
       }
+      // int feature_index = *index % obs->dim_;
+      // std::cout << "Reading feature[" << feature_index << "]" << std::endl; //TODO(ali): read feature (obs)
+      // *scalar = obs->stateValueAtIndex(feature_index);
    }
 
    void BoundMemoryIndices(int observation_buff_size);
@@ -328,6 +349,7 @@ class instruction {
       out_->working_memory_[outIdxE_](0, 0) = 1.0 / scalar_in1_;
 
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
@@ -424,11 +446,12 @@ class instruction {
       out_->working_memory_[outIdxE_](0, 0) = scalar_in1_ >= 0.0 ? 1.0 : 0.0;
 
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteVectorHeavisideOp(bool dbg) {
-      const double* in = in1_->working_memory_[in0IdxE_].data();
+      const double* in = InputMemory(0).data();
       const double* in_end = in + in1_->memory_size_;
       double* out = out_->working_memory_[outIdxE_].data();
       while (in != in_end) {
@@ -437,11 +460,12 @@ class instruction {
          ++in;
       }
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteMatrixHeavisideOp(bool dbg) {
-      const double* ind = in1_->working_memory_[in0IdxE_].data();
+      const double* ind = InputMemory(0).data();
       const double* ind_end = ind + in1_->memory_size_ * in1_->memory_size_;
       double* outd = out_->working_memory_[outIdxE_].data();
       while (ind != ind_end) {
@@ -450,150 +474,177 @@ class instruction {
          ++ind;
       }
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteScalarVectorProductOp(bool dbg) {
-      out_->working_memory_[outIdxE_] = in1_->working_memory_[in0IdxE_](0, 0) *
-                                        in2_->working_memory_[in1IdxE_];
+      out_->working_memory_[outIdxE_] = InputMemory(0)(0, 0) *
+                                        InputMemory(1);
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteScalarBroadcastOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          in1_->working_memory_[in0IdxE_](0, 0) *
+          InputMemory(0)(0, 0) *
           Eigen::MatrixXd::Ones(in1_->memory_size_, 1);
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteVectorReciprocalOp(bool dbg) {
       out_->working_memory_[outIdxE_](0, 0) =
-          1.0 / in1_->working_memory_[in0IdxE_](0, 0);
+          1.0 / InputMemory(0)(0, 0);
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteVectorNormOp(bool dbg) {
       out_->working_memory_[outIdxE_](0, 0) =
-          in1_->working_memory_[in0IdxE_].norm();
+          InputMemory(0).norm();
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteVectorAbsOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          (in1_->working_memory_[in0IdxE_].array().abs()).matrix();
+          (InputMemory(0).array().abs()).matrix();
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteVectorSumOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          in1_->working_memory_[in0IdxE_] + in2_->working_memory_[in1IdxE_];
+          InputMemory(0) + InputMemory(1);
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
+      }
+   }
+
+   inline void ExecuteVectorAccumOp(bool dbg) {
+      out_->working_memory_[outIdxE_] += InputMemory(0);
+      if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteVectorDiffOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          in1_->working_memory_[in0IdxE_] - in2_->working_memory_[in1IdxE_];
+          InputMemory(0) - InputMemory(1);
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteVectorProductOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          in1_->working_memory_[in0IdxE_].array() *
-          in2_->working_memory_[in1IdxE_].array();
+          InputMemory(0).array() *
+          InputMemory(1).array();
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteVectorDivisionOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          in1_->working_memory_[in0IdxE_].array() /
-          in2_->working_memory_[in1IdxE_].array();
+          InputMemory(0).array() /
+          InputMemory(1).array();
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteVectorInnerProductOp(bool dbg) {
       out_->working_memory_[outIdxE_](0, 0) =
-          in1_->working_memory_[in0IdxE_].col(0).dot(
-              in2_->working_memory_[in1IdxE_].col(0));
+          InputMemory(0).col(0).dot(
+              InputMemory(1).col(0));
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteVectorOuterProductOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          in1_->working_memory_[in0IdxE_] *
-          in2_->working_memory_[in1IdxE_].transpose();
+          InputMemory(0) *
+          InputMemory(1).transpose();
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteScalarMatrixProductOp(bool dbg) {
-      out_->working_memory_[outIdxE_] = in1_->working_memory_[in0IdxE_](0, 0) *
-                                        in2_->working_memory_[in1IdxE_];
+      out_->working_memory_[outIdxE_] = InputMemory(0)(0, 0) *
+                                        InputMemory(1);
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteMatrixReciprocalOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          (1.0 / in1_->working_memory_[in0IdxE_].array()).matrix();
+          (1.0 / InputMemory(0).array()).matrix();
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteMatrixVectorProductOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          in1_->working_memory_[in0IdxE_] * in2_->working_memory_[in1IdxE_];
+          InputMemory(0) * InputMemory(1);
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteVectorColumnBroadcastOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          in1_->working_memory_[in0IdxE_].replicate(
-              1, in1_->working_memory_[in0IdxE_].rows());
+          InputMemory(0).replicate(
+              1, InputMemory(0).rows());
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteVectorRowBroadcastOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          in1_->working_memory_[in0IdxE_]
-              .replicate(1, in1_->working_memory_[in0IdxE_].rows())
+          InputMemory(0)
+              .replicate(1, InputMemory(0).rows())
               .transpose();
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteMatrixNormOp(bool dbg) {
       out_->working_memory_[outIdxE_](0, 0) =
-          in1_->working_memory_[in0IdxE_].norm();
+          InputMemory(0).norm();
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteMatrixColumnNormOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          in1_->working_memory_[in0IdxE_]
+          InputMemory(0)
               .colwise()
               .norm()
               .transpose();  // automl-zero doesn't transpose?
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteMatrixRowNormOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          in1_->working_memory_[in0IdxE_].rowwise().norm();
+          InputMemory(0).rowwise().norm();
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
@@ -602,54 +653,61 @@ class instruction {
          out_->working_memory_[outIdxE_].transposeInPlace();
       else
          out_->working_memory_[outIdxE_] =
-             in1_->working_memory_[in0IdxE_].transpose();
+             InputMemory(0).transpose();
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteMatrixAbsOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          in1_->working_memory_[in0IdxE_].array().abs().matrix();
+          InputMemory(0).array().abs().matrix();
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteMatrixSumOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          in1_->working_memory_[in0IdxE_] + in2_->working_memory_[in1IdxE_];
+          InputMemory(0) + InputMemory(1);
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteMatrixDiffOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          in1_->working_memory_[in0IdxE_] - in2_->working_memory_[in1IdxE_];
+          InputMemory(0) - InputMemory(1);
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteMatrixProductOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          (in1_->working_memory_[in0IdxE_].array() *
-           in2_->working_memory_[in1IdxE_].array())
+          (InputMemory(0).array() *
+           InputMemory(1).array())
               .matrix();
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteMatrixDivisionOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          (in1_->working_memory_[in0IdxE_].array() /
-           in2_->working_memory_[in1IdxE_].array())
+          (InputMemory(0).array() /
+           InputMemory(1).array())
               .matrix();
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteMatrixMatrixProductOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          in1_->working_memory_[in0IdxE_] * in2_->working_memory_[in1IdxE_];
+          InputMemory(0) * InputMemory(1);
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
@@ -657,22 +715,24 @@ class instruction {
       out_->working_memory_[outIdxE_](0, 0) = min(scalar_in1_, scalar_in2_);
 
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteVectorMinOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          in1_->working_memory_[in0IdxE_].array().min(
-              in2_->working_memory_[in1IdxE_].array());
+          InputMemory(0).array().min(
+              InputMemory(1).array());
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteMatrixMinOp(bool dbg) {
-      const double* in1d = in1_->working_memory_[in0IdxE_].data();
-      const double* in2d = in2_->working_memory_[in1IdxE_].data();
-      const double* in1_end = in1d + in2_->working_memory_[in1IdxE_].rows() *
-                                         in2_->working_memory_[in1IdxE_].cols();
+      const double* in1d = InputMemory(0).data();
+      const double* in2d = InputMemory(1).data();
+      const double* in1_end = in1d + InputMemory(1).rows() *
+                                         InputMemory(1).cols();
       double* outd = out_->working_memory_[outIdxE_].data();
       while (in1d != in1_end) {
          const double in1v = *in1d;
@@ -683,6 +743,7 @@ class instruction {
          ++in2d;
       }
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
@@ -690,22 +751,24 @@ class instruction {
       out_->working_memory_[outIdxE_](0, 0) = max(scalar_in1_, scalar_in2_);
 
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteVectorMaxOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          in1_->working_memory_[in0IdxE_].array().max(
-              in2_->working_memory_[in1IdxE_].array());
+          InputMemory(0).array().max(
+              InputMemory(1).array());
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteMatrixMaxOp(bool dbg) {
-      const double* in1d = in1_->working_memory_[in0IdxE_].data();
-      const double* in2d = in2_->working_memory_[in1IdxE_].data();
-      const double* in1_end = in1d + in2_->working_memory_[in1IdxE_].rows() *
-                                         in2_->working_memory_[in1IdxE_].cols();
+      const double* in1d = InputMemory(0).data();
+      const double* in2d = InputMemory(1).data();
+      const double* in1_end = in1d + InputMemory(1).rows() *
+                                         InputMemory(1).cols();
       double* outd = out_->working_memory_[outIdxE_].data();
       while (in1d != in1_end) {
          const double in1v = *in1d;
@@ -716,58 +779,64 @@ class instruction {
          ++in2d;
       }
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteVectorMeanOp(bool dbg) {
       out_->working_memory_[outIdxE_](0, 0) =
-          in1_->working_memory_[in0IdxE_].mean();
+          InputMemory(0).mean();
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteMatrixMeanOp(bool dbg) {
       out_->working_memory_[outIdxE_](0, 0) =
-          in1_->working_memory_[in0IdxE_].mean();
+          InputMemory(0).mean();
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteMatrixRowMeanOp(bool dbg) {
       out_->working_memory_[outIdxE_] =
-          in1_->working_memory_[in0IdxE_].rowwise().mean();
+          InputMemory(0).rowwise().mean();
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteMatrixRowStDevOp(bool dbg) {
       for (int row = 0; row < out_->working_memory_[outIdxE_].rows(); ++row) {
          const Eigen::MatrixXd values =
-             in1_->working_memory_[in0IdxE_].row(row);
+             InputMemory(0).row(row);
          const double mean = values.mean();
          const double stdev = sqrt(
              (values.array() * values.array()).sum() /
-                 static_cast<double>(in1_->working_memory_[in0IdxE_].rows()) -
+                 static_cast<double>(InputMemory(0).rows()) -
              mean * mean);
          out_->working_memory_[outIdxE_](row, 0) = stdev;
       }
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteVectorStDevOp(bool dbg) {
-      const double mean = in1_->working_memory_[in0IdxE_].mean();
+      const double mean = InputMemory(0).mean();
       out_->working_memory_[outIdxE_](0, 0) =
-          sqrt(in1_->working_memory_[in0IdxE_].col(0).dot(
-                   in1_->working_memory_[in0IdxE_].col(0)) /
-                   in1_->working_memory_[in0IdxE_].rows() -
+          sqrt(InputMemory(0).col(0).dot(
+                   InputMemory(0).col(0)) /
+                   InputMemory(0).rows() -
                mean * mean);
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteMatrixStDevOp(bool dbg) {
-      const Eigen::MatrixXd values = in1_->working_memory_[in0IdxE_];
+      const Eigen::MatrixXd values = InputMemory(0);
       const double mean = values.mean();
       out_->working_memory_[outIdxE_](0, 0) =
           sqrt((values.array() * values.array()).sum() /
@@ -775,18 +844,22 @@ class instruction {
                                        out_->working_memory_[outIdxE_].cols()) -
                mean * mean);
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteScalarConstSetOp(bool dbg) {
       out_->working_memory_[outIdxE_] = in1_->const_memory_[in0IdxE_];
-      if (dbg) {}
+      if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
+      }
    }
 
    inline void ExecuteVectorConstSetOp(bool dbg) {
       out_->working_memory_[outIdxE_] = in1_->const_memory_[in0IdxE_];
 
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
@@ -794,63 +867,70 @@ class instruction {
       out_->working_memory_[outIdxE_] = in1_->const_memory_[in0IdxE_];
 
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteScalarUniformSetOp(bool dbg) {
       uniform_real_distribution<double> dis(
-          in1_->working_memory_[in0IdxE_](0, 0),
-          in2_->working_memory_[in1IdxE_](0, 0));
+          InputMemory(0)(0, 0),
+          InputMemory(1)(0, 0));
       out_->working_memory_[outIdxE_](0, 0) = dis(rng_);
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteVectorUniformSetOp(bool dbg) {
       uniform_real_distribution<double> dis(
-          in1_->working_memory_[in0IdxE_](0, 0),
-          in2_->working_memory_[in1IdxE_](0, 0));
+          InputMemory(0)(0, 0),
+          InputMemory(1)(0, 0));
       for (int i = 0; i < out_->working_memory_[outIdxE_].rows(); i++)
          out_->working_memory_[outIdxE_](i, 0) = dis(rng_);
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteMatrixUniformSetOp(bool dbg) {
       uniform_real_distribution<double> dis(
-          in1_->working_memory_[in0IdxE_](0, 0),
-          in2_->working_memory_[in1IdxE_](0, 0));
+          InputMemory(0)(0, 0),
+          InputMemory(1)(0, 0));
       for (int row = 0; row < out_->working_memory_[outIdxE_].rows(); row++)
          for (int col = 0; col < out_->working_memory_[outIdxE_].cols(); col++)
             out_->working_memory_[outIdxE_](row, col) = dis(rng_);
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteScalarGaussianSetOp(bool dbg) {
-      normal_distribution<double> dis(in1_->working_memory_[in0IdxE_](0, 0),
-                                      in2_->working_memory_[in1IdxE_](0, 0));
+      normal_distribution<double> dis(InputMemory(0)(0, 0),
+                                      InputMemory(1)(0, 0));
       out_->working_memory_[outIdxE_](0, 0) = dis(rng_);
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteVectorGaussianSetOp(bool dbg) {
-      normal_distribution<double> dis(in1_->working_memory_[in0IdxE_](0, 0),
-                                      in2_->working_memory_[in1IdxE_](0, 0));
+      normal_distribution<double> dis(InputMemory(0)(0, 0),
+                                      InputMemory(1)(0, 0));
       for (int i = 0; i < out_->working_memory_[outIdxE_].rows(); i++)
          out_->working_memory_[outIdxE_](i, 0) = dis(rng_);
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteMatrixGaussianSetOp(bool dbg) {
-      normal_distribution<double> dis(in1_->working_memory_[in0IdxE_](0, 0),
-                                      in2_->working_memory_[in1IdxE_](0, 0));
+      normal_distribution<double> dis(InputMemory(0)(0, 0),
+                                      InputMemory(1)(0, 0));
       for (int row = 0; row < out_->working_memory_[outIdxE_].rows(); row++)
          for (int col = 0; col < out_->working_memory_[outIdxE_].cols(); col++)
             out_->working_memory_[outIdxE_](row, col) = dis(rng_);
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
@@ -881,6 +961,7 @@ class instruction {
       out_->working_memory_[outIdxE_](0, 0) = std::pow(scalar_in1_, 2);
 
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
@@ -888,6 +969,7 @@ class instruction {
       out_->working_memory_[outIdxE_](0, 0) = std::pow(scalar_in1_, 2);
 
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
@@ -895,6 +977,7 @@ class instruction {
       out_->working_memory_[outIdxE_](0, 0) = std::tanh(scalar_in1_);
 
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
@@ -902,36 +985,51 @@ class instruction {
       out_->working_memory_[outIdxE_](0, 0) = std::sqrt(scalar_in1_);
 
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
+      }
+   }
+
+   // TODO(ALI)
+   inline void ExecuteScalarAccumOp(bool dbg) {
+   out_->working_memory_[outIdxE_](0, 0) += scalar_in1_;
+
+   if (dbg) {
+      cerr << __func__ << ": outIdxE_=" << outIdxE_
+         << " in0IdxE_=" << in0IdxE_
+         << " | accum " << scalar_in1_
+         << " -> " << out_->working_memory_[outIdxE_](0, 0) << endl;
       }
    }
 
    inline void ExecuteScalarVectorAssignOp(bool dbg) {
       out_->working_memory_[outIdxE_](0, 0) =
-          in1_->working_memory_[in0IdxE_](in2IdxE_, 0);
+          InputMemory(0)(in2IdxE_, 0);
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    inline void ExecuteScalarMatrixAssignOp(bool dbg) {
       out_->working_memory_[outIdxE_](0, 0) =
-          in1_->working_memory_[in0IdxE_](in2IdxE_, in3IdxE_);
+          InputMemory(0)(in2IdxE_, in3IdxE_);
       if (dbg) {
+         cerr << __func__ << ": outIdxE_=" << outIdxE_ << endl;
       }
    }
 
    // TODO(skelly): warning: this op assumes obs_buff == memory_size
    // so, can't evolve obs buff size
    inline void ExecuteObsBuffSliceOp(bool dbg) {
-      for (size_t i = 0; i < in1_->working_memory_.size(); i++) {
+      for (size_t i = 0; i < GetInMem(0)->n_memories_; i++) {
          out_->working_memory_[outIdxE_](i, 0) =
-             in1_->working_memory_[i](in2IdxE_, 0);
+             InputMemoryAt(0, i)(in2IdxE_, 0);
       }
 
       if (dbg) {
          // TO(skelly): improve debug format
          cerr << "from ";
-         for (size_t i = 0; i < in1_->working_memory_.size(); i++) {
-            cerr << " " << in1_->working_memory_[i](in2IdxE_, 0);
+         for (size_t i = 0; i < GetInMem(0)->n_memories_; i++) {
+            cerr << " " << InputMemoryAt(0, i)(in2IdxE_, 0);
          }
          cerr << " To:";
          for (size_t i = 0; i < out_->working_memory_.size(); i++) {

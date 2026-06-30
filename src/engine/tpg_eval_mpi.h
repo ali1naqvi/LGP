@@ -14,6 +14,8 @@
 #include "evaluators_control.h"
 #include "evaluators_forecast.h"
 #include "evaluators_mujoco.h"
+#include "evaluators_maze.h"
+#include "evaluators_gradient.h"
 
 #include <boost/mpi.hpp>
 #include <chrono>
@@ -144,6 +146,8 @@ inline void evaluator(TPG &tpg, mpi::communicator &world, vector<TaskEnv *> &tas
   evaluator_map["Control"] = &EvalControl;
   evaluator_map["RecursiveForecast"] = &EvalRecursiveForecast;
   evaluator_map["Mujoco"] = &EvalMujoco;
+  evaluator_map["Maze"] = &EvalMaze;
+  evaluator_map["Gradient"] = &EvalGradient;
   auto eval_data = tpg.InitEvalData();
   eval_data.world_rank = world.rank();
   eval_data.world_size = world.size();
@@ -159,6 +163,9 @@ inline void evaluator(TPG &tpg, mpi::communicator &world, vector<TaskEnv *> &tas
          eval_data.tm = tm;
          for (eval_data.episode = 0; eval_data.episode < eval_data.tm->_n_eval;
               eval_data.episode++) {
+            eval_data.pred_error = 0;
+            eval_data.timestep = 0;
+            eval_data.sample = 0;
             if (tpg.GetParam<int>("seed_with_episode_number")) {
                tpg.rngs_[AUX_SEED].seed(eval_data.episode * 42);
             }
@@ -166,7 +173,10 @@ inline void evaluator(TPG &tpg, mpi::communicator &world, vector<TaskEnv *> &tas
             evaluator_map[eval_data.task->eval_type_](tpg, eval_data);
             tpg.FinalizeStepData(eval_data);
          }
+         eval_data.tm->HebbianMap.calculatePlasticity(0.0, eval_data.tm->members_run_.size());
+         eval_data.tm->team_plasticity_ = std::clamp(eval_data.tm->HebbianMap.plasticity, 0.0, 1.0);
       }
+      tpg.AppendSelfModifyingRates(eval_data.eval_result, eval_data.teams);
       gather(world, eval_data.eval_result, 0);
     }
   }
@@ -182,52 +192,72 @@ inline void replayer(TPG &tpg, vector<TaskEnv *> &tasks) {
   std::set<team *, teamIdComp> teams_visitedAllTasks;
 
   eval_data.teams = tpg.GetRootTeamsInVec();
+
   eval_data.team_map = tpg.team_map_;
   eval_data.task = tasks[tpg.GetState("active_task")];
   eval_data.eval_result = "";
+
   for (auto tm : eval_data.teams) {
       if (tm->id_ != tpg.GetParam<int>("id_to_replay")) continue;
+
       eval_data.tm = tm;
-      
       vector<int> steps_per_task(tpg.GetState("n_task"), 0);
-      // TODO(skelly): clean up
-      // tpg.rngs_[AUX_SEED].seed(tpg.GetParam<int>("seed_aux"));
       std::vector<double> outcomes;
+
       for (int task = 0; task < tpg.GetState("n_task"); task++) {
           tpg.state_["active_task"] = task;
           eval_data.task = tasks[tpg.GetState("active_task")];
-          tm->_n_eval =
-            eval_data.task->GetNumEval(_TEST_PHASE);
+          tm->_n_eval = eval_data.task->GetNumEval(_TEST_PHASE);
+
           for (eval_data.episode = 0; eval_data.episode < eval_data.tm->_n_eval;
-              eval_data.episode++) {
-                if (!eval_data.animate) {
+               eval_data.episode++) {
+              eval_data.pred_error = 0;
+              eval_data.timestep = 0;
+              eval_data.sample = 0;
+              if (tpg.GetParam<int>("seed_with_episode_number")) {
                   tpg.rngs_[AUX_SEED].seed(eval_data.episode * 42);
-                }
+              }
+
+
               eval_data.tm->InitMemory(tpg.team_map_, tpg.params_);
 
               if (eval_data.task->eval_type_ == "RecursiveForecast") {
-                  EvalRecursiveForecastViz(
-                      tpg, eval_data, teamUseMapPerTask, teams_visitedAllTasks,
-                      steps_per_task[tpg.GetState("active_task")]);
+                  EvalRecursiveForecastViz(tpg, eval_data, teamUseMapPerTask, teams_visitedAllTasks,
+                                           steps_per_task[tpg.GetState("active_task")]);
               } else if (eval_data.task->eval_type_ == "Control") {
                   EvalControlViz(tpg, eval_data, teamUseMapPerTask,
-                                teams_visitedAllTasks,
-                                steps_per_task[tpg.GetState("active_task")]);
-              } else {
+                                 teams_visitedAllTasks,
+                                 steps_per_task[tpg.GetState("active_task")]);
+              } else if (eval_data.task->eval_type_ == "Maze"){   
+                  EvalMaze(tpg, eval_data);
+              } else if (eval_data.task->eval_type_ == "Gradient"){
+                  EvalGradient(tpg, eval_data);
+              }
+              else
+              {
                   EvalMujoco(tpg, eval_data);
               }
+
               tpg.FinalizeStepData(eval_data);
-              outcomes.push_back(eval_data.stats_double[REWARD1_IDX]);
+              double reward = eval_data.stats_double[REWARD1_IDX];
+              outcomes.push_back(reward);
+             //std::cerr << "EPISODE: " << eval_data.episode << " REWARD: " << reward << endl;
+              //std::cout << "END OF EPISODE" << endl;
           }
       }
-      tpg.printGraphDotGPTPXXI(eval_data.tm->id_, teams_visitedAllTasks,
-                              teamUseMapPerTask, steps_per_task);
+
+      // tpg.printGraphDotGPTPXXI(eval_data.tm->id_, teams_visitedAllTasks,
+      //                         teamUseMapPerTask, steps_per_task);
+
+      tpg.printGraphDotMujoco(eval_data.tm->id_, eval_data.teams_visited);
+      tpg.printGraphDotMujocoVisited(eval_data.tm->id_, eval_data.teams_visited);
 
       cout << " Evaluation result team:" << eval_data.tm->id_ << " n_outcomes "
           << outcomes.size() << " mean " << VectorMean(outcomes) << " median "
           << VectorMedian(outcomes) << endl;
       cout << VectorToString(outcomes) << endl;
 
+    // TODO(ALI): uncomment for video
     // Add video creation for headless mode
     if (headless && frame_idx > 0) {
       // Create videos directory if it doesn't exist

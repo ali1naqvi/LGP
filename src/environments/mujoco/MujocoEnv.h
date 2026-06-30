@@ -23,10 +23,12 @@ class MujocoEnv : public TaskEnv {
     std::string model_path_;  // Absolute path to model xml file
     int frame_skip_ = 1;  // Number of frames per simlation step
     int obs_size_;  // Number of variables in observation vector
+    int max_sim_steps_ = -1;
+    int sim_steps_elapsed_ = 0;
 
     MujocoEnv() {}
     ~MujocoEnv() {}
-    virtual void reset(std::mt19937& rng) = 0;
+    virtual void reset(std::mt19937& rng, int& episode_number) = 0;
     virtual bool terminal() = 0;
     virtual Results sim_step(std::vector<double>& action) = 0;
 
@@ -54,12 +56,17 @@ class MujocoEnv : public TaskEnv {
     }
 
     void do_simulation(std::vector<double>& ctrl, int n_frames) {
-        for (int i = 0; i < m_->nu && i < static_cast<int>(ctrl.size()); i++) {
-            d_->ctrl[i] = ctrl[i];
+        for (int i = 0; i < m_->nu; i++) {
+            double v = (i < static_cast<int>(ctrl.size())) ? ctrl[i] : 0.0;
+            if (!std::isfinite(v)) v = 0.0;
+            if (v < -1.0) v = -1.0;
+            if (v > 1.0) v = 1.0;
+            d_->ctrl[i] = v;
         }
         for (int i = 0; i < n_frames; i++) {
             mj_step(m_, d_);
         }
+        sim_steps_elapsed_ += std::max(0, n_frames);
         // As of MuJoCo 2.0, force - related quantities like cacc are not
         // computed unless there's a force sensor in the model. See https:
         // // github.com/openai/gym/issues/1541
@@ -67,6 +74,19 @@ class MujocoEnv : public TaskEnv {
     }
 
     int GetObsSize() { return obs_size_; }
+
+    bool time_limit_reached() const {
+        if (max_sim_steps_ > 0) return sim_steps_elapsed_ >= max_sim_steps_;
+        return step_ >= max_step_;
+    }
+
+    int max_episode_control_steps() const {
+        if (max_sim_steps_ > 0) {
+            const int fs = std::max(1, frame_skip_);
+            return (max_sim_steps_ + fs - 1) / fs;  // ceil(max_sim_steps_/fs)
+        }
+        return max_step_;
+    }
 };
 
 #endif

@@ -1,13 +1,30 @@
+#include <string>
 #include "team.h"
 #include "EvalData.h"
 
 #include <algorithm>
 #include <limits>
+#include <cmath>
 
 // Allow duplicates
+// void team::AddProgram(RegisterMachine* prog, int position) {
+//    prog->obs_index_ = obs_index_;
+//    auto it = members_.begin();
+//    advance(it, position);
+//    members_.insert(it, prog);
+//    if (prog->action_ < 0)
+//       n_atomic_++;
+//    members_run_.resize(members_.size());  // put in mark introns
+//    prog->nrefs_++;
+// }
+
 void team::AddProgram(RegisterMachine* prog, int position) {
+   if (std::any_of(members_.begin(), members_.end(),
+                   [&](const RegisterMachine* p){ return p->id_ == prog->id_; }))
+      return;
+   prog->obs_index_ = obs_index_;
    auto it = members_.begin();
-   advance(it, position);
+   std::advance(it, position);
    members_.insert(it, prog);
    if (prog->action_ < 0)
       n_atomic_++;
@@ -18,11 +35,13 @@ void team::AddProgram(RegisterMachine* prog, int position) {
 /******************************************************************************/
 string team::ToString() const {
    ostringstream oss;
-   oss << "team:" << id_ << ":" << gtime_ << ":" << _n_eval;
+
+   oss << "team:" << id_ << ":" << gtime_ << ":" << obs_index_ << ":" << lambda_td_ << ":" << decay_factor_ << ":" << _n_eval;
    for (auto prog : members_) {
       oss << ":" << prog->id_;
    }
    oss << endl;
+
    if (incomingPrograms_.size() > 0) {
       oss << "incoming_progs:" << id_;
       for (auto& ip : incomingPrograms_) {
@@ -30,8 +49,20 @@ string team::ToString() const {
       }
       oss << endl;
    }
+   
+   // if (!HebbianMap.weights.empty()) {
+   //  for (const auto& [prevProgID, currMap] : HebbianMap.weights) {
+   //      for (const auto& [currProgID, weight] : currMap) {
+   //          oss << "weights:" << id_ << ":" << prevProgID << ":" << currProgID 
+   //              << ":" << std::setprecision(4) << weight << "\n";
+   //      }
+   //  }
+   //  oss << endl;
+   // }
+   
    return oss.str();
 }
+
 
 /******************************************************************************/
 void team::InitMemory(map<long, team*>& teamMap,
@@ -39,17 +70,33 @@ void team::InitMemory(map<long, team*>& teamMap,
    set<team*, teamIdComp> teams;
    set<RegisterMachine*, RegisterMachineIdComp> RegisterMachines;
    GetAllNodes(teamMap, teams, RegisterMachines);
+   const auto self_modifying = params.find("self_modifying");
+   const bool use_self_modifying_constants = self_modifying != params.end() && std::any_cast<int>(self_modifying->second) != 0;
    for (auto prog : RegisterMachines) {
-      if (!isEqual(std::any_cast<double>(params["p_memory_mu_const"]), 0.0)) {
+      if (use_self_modifying_constants ||
+          !isEqual(std::any_cast<double>(params["p_memory_mu_const"]), 0.0)) {
          prog->use_evolved_const_ = true;
-         // Initialize working memory with evolved constants
-         prog->CopyPrivateConstToWorkingMemory();
+         prog->ConfigureSelfModifyingRegisters(params, false);
+         if (use_self_modifying_constants) {
+            // Preserve the rate phenotype generated in the preceding episode.
+            prog->CopyPrivateConstToWorkingMemoryPreservingSelfModifyingRegisters();
+         } else {
+            prog->CopyPrivateConstToWorkingMemory();
+         }
       } else {
          // Initialize working memory with zeros
          prog->use_evolved_const_ = false;
          prog->ClearWorkingMemory();
       }
    }
+      if(std::any_cast<int>(params["reset_per_episode"]) == 1){
+         for (auto* t : teams) {
+            t->HebbianMap.resetWeights();
+
+            }
+      }
+      for (auto* t : teams){
+            t->HebbianMap.resetElig();} 
 }
 
 /******************************************************************************/
@@ -60,6 +107,7 @@ void team::clone(map<long, phyloRecord>& phyloGraph, team** tm) {
    }
    (*tm)->fitnessBins(fitnessBins_);
    (*tm)->cloneId_ = id_;
+   (*tm)->obs_index_ = obs_index_; //TODO(ali) double check
    clones_++;
 }
 
@@ -69,8 +117,9 @@ void team::features(set<long>& F) const {
       die(__FILE__, __FUNCTION__, __LINE__, "feature set not empty");
 
    for (auto prog : members_)
-      F.insert(prog->features_.begin(), prog->features_.begin());
+      F.insert(prog->features_.begin(), prog->features_.end());
 }
+
 
 /******************************************************************************/
 double team::novelty(int type, int kNN) const {
@@ -153,7 +202,6 @@ void team::updateComplexityRecord(map<long, team*>& teamMap, int rtcIndex,
 //       memories);
 //   }
 // }
-
 /******************************************************************************/
 // this version returns partial graph up to team tm
 void team::GetAllNodes(map<long, team*>& teamMap,
@@ -174,16 +222,24 @@ void team::GetAllNodes(map<long, team*>& teamMap,
 /******************************************************************************/
 void team::GetAllNodes(
     map<long, team*>& teamMap, set<team*, teamIdComp>& visitedTeams,
-    set<RegisterMachine*, RegisterMachineIdComp>& RegisterMachines) const {
-   visitedTeams.insert(teamMap[id_]);
-   for (auto prog : members_) {
-      RegisterMachines.insert(prog);
-      if ((prog)->action_ >= 0 &&
-          find(visitedTeams.begin(), visitedTeams.end(),
-               teamMap[(prog)->action_]) == visitedTeams.end())
-         teamMap[(prog)->action_]->GetAllNodes(teamMap, visitedTeams,
-                                               RegisterMachines);
-   }
+    set<RegisterMachine*, RegisterMachineIdComp>& RegisterMachines) const
+{
+    // Print debug message indicating we've entered this function
+
+    visitedTeams.insert(teamMap[id_]);
+    for (auto prog : members_) {
+        RegisterMachines.insert(prog);
+        // Print debug message about which RegisterMachine we're adding
+
+        if ((prog)->action_ >= 0 &&
+            find(visitedTeams.begin(), visitedTeams.end(),
+                 teamMap[(prog)->action_]) == visitedTeams.end())
+        {
+            // Print debug message about the recursive call
+            teamMap[(prog)->action_]->GetAllNodes(teamMap, visitedTeams,
+                                                  RegisterMachines);
+        }
+    }
 }
 
 /******************************************************************************/
@@ -466,9 +522,213 @@ int team::numOutcomes(int phase, int task) {
    return numOut;
 }
 
-/******************************************************************************/
+std::tuple<int, double, double> team::WrapVectorBidProbability(
+    std::vector<RegisterMachine*>& programs,
+    std::mt19937& rng,
+    const bool homeostatic_root,
+    const bool post_connection,
+    const bool probabilistic_bid,
+    const std::string& homeostatic_TD)
+{
+    std::vector<double> bid_values;
+    std::vector<double> softmax_bid_values;
 
-// Assumes the RegisterMachine is in the team
+    bid_values.reserve(programs.size());
+    softmax_bid_values.reserve(programs.size());
+
+    std::tuple<int, double, double> winning_program_info;
+    std::tuple<long, double, double, double> curr_program_info;
+
+    for (const auto* prog : programs){
+         bid_values.push_back(prog->bid_val_);
+      }
+
+   auto softmax = [](std::vector<double>& values)
+    {
+        const double epsilon = 1e-3;
+        double factor = 1.0 - epsilon * values.size();
+        if (factor < 0.0) factor = 0.0;
+        double max_val = *std::max_element(values.begin(), values.end());
+        double sum_exps = 0.0;
+
+        for (auto& val : values)
+        {
+            val = std::exp(val - max_val);
+            sum_exps += val;
+        }
+
+        double sum_adjusted = 0.0;
+        for (auto& val : values)
+        {
+            val = (val / sum_exps) * factor + epsilon; 
+            sum_adjusted += val;
+        }
+
+        for (auto& val : values)
+            val /= sum_adjusted;
+    };
+
+    auto softmax_probs = [](std::vector<double>& values){
+        const double epsilon = 1e-3;
+        const double T = 0.8;                 // higher temp = more exploration
+        const double invT = (T > 0.0) ? 1.0 / T : 1e6;
+
+        double factor = 1.0 - epsilon * values.size();
+        if (factor < 0.0) factor = 0.0;
+
+        double max_scaled = -std::numeric_limits<double>::infinity();
+        for (const auto& v : values)
+            max_scaled = std::max(max_scaled, v * invT);
+
+        double sum_exps = 0.0;
+        for (auto& v : values)
+        {
+            v = std::exp(v * invT - max_scaled);
+            sum_exps += v;
+        }
+
+        double sum_adjusted = 0.0;
+        for (auto& v : values)
+        {
+            v = (v / sum_exps) * factor + epsilon;
+            sum_adjusted += v;
+        }
+
+        for (auto& v : values)
+            v /= sum_adjusted;
+    };
+
+    // Routing-based modulatory signal: higher when the router is confident (low entropy)
+   //  auto routing_mod_signal = [](const std::vector<double>& probs) -> double {
+   //      if (probs.empty()) return 0.0;
+   //      double H = 0.0;
+   //      for (double p : probs) {
+   //          if (p > 0.0) H -= p * std::log(p);
+   //      }
+   //      double Hmax = std::log(static_cast<double>(probs.size()));
+   //      if (Hmax <= 0.0) return 0.0;
+   //      double entropy_norm = H / Hmax;      // in [0,1]
+   //      double concentration = 1.0 - entropy_norm;  // 0 = uniform, 1 = peaked
+   //      // (Optional) keep away from exact 0 to avoid stalling tiny updates
+   //      const double floor = 1e-6;
+   //      if (concentration < floor) concentration = floor;
+   //      return concentration; // our modulatory term m_t
+   //  };
+
+    softmax(bid_values);
+    softmax_bid_values = bid_values;
+   //  double mod_signal = routing_mod_signal(softmax_bid_values);
+   double winning_lr_to_keep = 0.0;
+   for (size_t i = 0; i < programs.size(); ++i){
+      if (HebbianMap.getEligWeight(HebbianMap.getPrevProgID(), programs[i]->id_) < 1.0){
+         winning_lr_to_keep = 0.0;
+      }
+      else{
+         winning_lr_to_keep = programs[i]->learning_rate_;
+      }
+   }
+
+   if (HebbianMap.getPrevProgID() == -1 && homeostatic_root){ // root team
+    for (size_t i = 0; i < programs.size(); ++i){
+        const auto* prog = programs[i];
+      if (winning_lr_to_keep == 0.0){
+         curr_program_info = std::make_tuple(prog->id_, bid_values[i], prog->learning_rate_, prog->initial_heb_noise_);}
+      else{
+       curr_program_info = std::make_tuple(prog->id_, bid_values[i], winning_lr_to_keep, prog->initial_heb_noise_);}
+        HebbianMap.setCurrent(curr_program_info);
+        double weight = HebbianMap.getWeight(HebbianMap.getPrevProgID(),prog->id_, bid_values[i]);
+        bid_values[i] = weight;
+        HebbianMap.decayElig(HebbianMap.getPrevProgID(), prog->id_); //decay eligibility of each connection
+        if (homeostatic_TD == "none"){
+            HebbianMap.setWeightRoot();
+            HebbianMap.divisiveRenormRow(/*Sg=*/3.0);
+        }
+    }
+    HebbianMap.root_step++;
+   }
+   else if (HebbianMap.getPrevProgID() > -1 && post_connection){ // post connection
+        for (size_t i = 0; i < programs.size(); ++i){   
+            const auto* prog = programs[i];
+            if (winning_lr_to_keep == 0.0){
+            curr_program_info = std::make_tuple(prog->id_, bid_values[i], prog->learning_rate_, prog->initial_heb_noise_);}
+            else{
+            curr_program_info = std::make_tuple(prog->id_, bid_values[i], winning_lr_to_keep, prog->initial_heb_noise_);}
+            HebbianMap.setCurrent(curr_program_info);
+            double weight = HebbianMap.getWeight(HebbianMap.getPrevProgID(), prog->id_, bid_values[i]);
+            bid_values[i] = weight;
+            HebbianMap.decayElig(HebbianMap.getPrevProgID(), prog->id_); //decay eligibility of each connection
+            if (homeostatic_TD == "none"){
+            HebbianMap.setWeight();
+            HebbianMap.divisiveRenormRow(/*Sg=*/3.0);
+            } 
+        }
+    }
+   
+
+    int index_winner_ = 0;
+    if (probabilistic_bid) {
+        std::vector<double> probs(programs.size());
+        probs = bid_values;
+        softmax_probs(probs);
+      //   softmax_probs(probs);
+        std::discrete_distribution<> dist(probs.begin(), probs.end());
+        index_winner_ = dist(rng);
+    }
+    else {
+        index_winner_ = std::distance(
+            bid_values.begin(),
+            std::max_element(bid_values.begin(), bid_values.end())
+        );
+    }
+
+   // winner updates
+   // **********************
+   curr_program_info = std::make_tuple(
+            programs[index_winner_]->id_,
+            softmax_bid_values[index_winner_],
+            programs[index_winner_]->learning_rate_,
+            programs[index_winner_]->initial_heb_noise_
+        );
+        HebbianMap.setCurrent(curr_program_info);
+        HebbianMap.boostElig(HebbianMap.getPrevProgID(), programs[index_winner_]->id_, softmax_bid_values[index_winner_]);
+        // only modulate reward on teams 
+      //   if (programs[index_winner_]->action_ < 0){
+      //       HebbianMap.boostElig(HebbianMap.getPrevProgID(), programs[index_winner_]->id_, softmax_bid_values[index_winner_]);
+      //   }
+      //   HebbianMap.pred_error = mod_signal;
+        if (HebbianMap.getPrevProgID() == -1 && homeostatic_TD == "step"){
+            HebbianMap.setWeightRootTD();
+        } else if (HebbianMap.getPrevProgID() > -1 && homeostatic_TD == "step"){
+            HebbianMap.setWeightTD();}
+   // **********************
+
+    HebbianMap.divisiveRenormRow(/*Sg=*/3.0);
+
+    winning_program_info = std::make_tuple(
+        index_winner_,
+        softmax_bid_values[index_winner_],
+        programs[index_winner_]->learning_rate_
+    );
+    
+    bid_values.clear();
+    softmax_bid_values.clear();
+    // Debug: print each program's ID and its softmax bid
+    //   std::cout.setf(std::ios::fixed);
+    //   std::cout.precision(6);
+    //   cout << "------------------------------" <<endl;
+    //   for (size_t i = 0; i < programs.size(); ++i) {
+    //       std::cout << "prog_id " << programs[i]->id_
+    //                 << " softmax_bid " << softmax_bid_values[i]
+    //                 << " action " << programs[i]->action_
+    //                 << std::endl;
+    //   }
+    //   cout << "------------------------------" <<endl;
+    return winning_program_info;
+}
+
+
+/******************************************************************************/
+// Assumes the program is in the team
 // Does not maintain team size > 0
 // Does not maintain n_atomic_ > 0
 void team::RemoveProgram(RegisterMachine* prog) {
@@ -497,6 +757,7 @@ bool team::RemoveRandomProgram(mt19937& rng) {
    }
    return false;
 }
+
 
 /******************************************************************************/
 void team::resetOutcomes(int phase) {
@@ -566,32 +827,88 @@ void team::setOutcome(point* pt) {
        numOutcomes(pt->phase(), pt->task());
 }
 
-/******************************************************************************/
-void team::GetAction(EvalData& eval_data) {
+void team::GetAction(EvalData& eval_data, std::mt19937& rng, std::unordered_map<std::string, std::any>& params, std::tuple<long, double, double>& prev_prog_history) {
    eval_data.team_path.push_back(eval_data.team_map[id_]);
+   long teamIdToFollow = 0;
 
-   int l = 0;
-   for (auto prog : members_) {
-      prog->Run(eval_data, eval_data.timestep, eval_data.team_path.size(),
-                eval_data.verbose);
-      members_run_[l++] = prog;
-      eval_data.instruction_count +=
-          static_cast<int>(prog->instructions_effective_.size());
+   members_run_.clear();
+   members_run_.reserve(members_.size());
+   for (auto* prog : members_) {
+      if (std::any_cast<int>(params["dynamic_lgp"]) == 0){
+           prog->Run(eval_data, eval_data.timestep, eval_data.team_path.size(), eval_data.verbose);}
+      else{prog->RunCoordination(eval_data, eval_data.timestep, eval_data.team_path.size(), eval_data.verbose);}
+
+   members_run_.push_back(prog);
+   eval_data.instruction_count += static_cast<int>(prog->instructions_effective_.size());
    }
 
-   sort(members_run_.begin(), members_run_.end(),
-        RegisterMachineBidLexicalCompare());
-   long teamIdToFollow = 0;
-   for (size_t i = 0; i < members_run_.size(); i++) {
-      if (members_run_[i]->action_ < 0) {
-         eval_data.program_out = members_run_[i];
+   const bool hebb_learn = std::any_cast<int>(params["hebb_learning"]) == 1;
+   const bool homeostatic_root = std::any_cast<int>(params["homeostatic_root"]) == 1;
+   const bool post_connection = std::any_cast<int>(params["post_connection"]) == 1;
+   const bool probabilistic_bid = std::any_cast<int>(params["probabilistic_bid"]) == 1;
+   //bool eligibility_trace = std::any_cast<int>(params["eligibility_trace"]) == 1;
+   const std::string& homeostatic_TD = std::any_cast<std::string>(params["homeostatic_TD"]);
+   
+
+   if(hebb_learn){
+     
+      HebbianMap.lambda_td = eval_data.tm->lambda_td_;
+      HebbianMap.pred_error = eval_data.pred_error;
+      HebbianMap.gamma = std::any_cast<double>(params["decay_factor"]);
+
+      HebbianMap.additive_root = (std::any_cast<int>(params["additive_root"]) == 1);
+      HebbianMap.additive_sub_team = (std::any_cast<int>(params["additive_sub_team"]) == 1);
+ 
+      if(HebbianMap.gamma == 0.0){
+      HebbianMap.gamma = eval_data.tm->decay_factor_;}
+
+      std::tuple<int, double, double> curr_program_info;
+      HebbianMap.setPrevious(prev_prog_history);
+      curr_program_info = WrapVectorBidProbability(members_run_,rng, homeostatic_root, post_connection, probabilistic_bid, homeostatic_TD); //what returns from here is the index of the winner NOT ID.
+      long id = members_run_[std::get<0>(curr_program_info)]->id_;
+      // cout << "winner program: " << members_run_[std::get<0>(curr_program_info)]->id_  << " team: " << eval_data.team_path.back()->id_ << endl; // todo(ALI): HEATMAP PROGRAM
+
+      if (members_run_[std::get<0>(curr_program_info)]->action_ < 0) {  // has an atomic action
+         if (std::any_cast<int>(params["debug_map"]) == 1)
+               HebbianMap.printWeights();
+         HebbianMap.clearCurrent();             //clear since this is atomic TODO(ALI) double check logic
+         prev_prog_history = std::make_tuple(-1, 1, 1); //id, bid, learning_rate
+         
+         eval_data.program_out = members_run_[std::get<0>(curr_program_info)];
+         // cout << "prog: " << members_run_[std::get<0>(curr_program_info)]->id_ << " bid: " << members_run_[std::get<0>(curr_program_info)]->bid_val_ << endl;
+         // members_run_[std::get<0>(curr_program_info)]->PrintInstructions(false);
          return;
-      } else if (find(eval_data.team_path.begin(), eval_data.team_path.end(),
-                      eval_data.team_map[members_run_[i]->action_]) ==
-                 eval_data.team_path.end()) {
-         teamIdToFollow = members_run_[i]->action_;
-         break;
+      } else { //leads to a new team
+         teamIdToFollow = members_run_[std::get<0>(curr_program_info)]->action_;
+         prev_prog_history = std::make_tuple(members_run_[std::get<0>(curr_program_info)]->id_,
+            std::get<1>(curr_program_info), 
+            std::get<2>(curr_program_info));
+           //  cout << "prog: " << members_run_[std::get<0>(curr_program_info)]->id_ << " bid: " << members_run_[std::get<0>(curr_program_info)]->bid_val_ << endl;
+         // members_run_[std::get<0>(curr_program_info)]->PrintInstructions(false);
       }
    }
-   return eval_data.team_map[teamIdToFollow]->GetAction(eval_data);
+   else{
+      sort(members_run_.begin(), members_run_.end(), RegisterMachineBidLexicalCompare());
+      // if (eval_data.team_path.size() == 1) {
+      //    std::cout << "step " << std::endl;
+      //    for (size_t i = 0; i < members_run_.size(); i++){
+      //       std::cout << "Program " << i << ": Weight = 0 " << " Bid = " << members_run_[i]->bid_val_ << "\n";
+      //    }
+      // } // todo(ALI): HEATMAP PROGRAM
+      for (size_t i = 0; i < members_run_.size(); i++) {
+        // cout << "winner program: " << members_run_[i]->id_  << " team: " << eval_data.team_path.back()->id_ << endl; // todo(ALI): HEATMAP PROGRAM
+         if (members_run_[i]->action_ < 0) {
+            eval_data.program_out = members_run_[i];
+            // eval_data.program_out->PrintInstructions(false);
+            return;
+         } else if (find(eval_data.team_path.begin(), eval_data.team_path.end(),
+                         eval_data.team_map[members_run_[i]->action_]) ==
+                    eval_data.team_path.end()) {
+                     // members_run_[i]->PrintInstructions(false);
+            teamIdToFollow = members_run_[i]->action_;
+            break;
+         }
+      }
+   }
+   return eval_data.team_map[teamIdToFollow]->GetAction(eval_data, rng, params, prev_prog_history);
 }

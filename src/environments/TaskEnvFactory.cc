@@ -10,7 +10,10 @@
 #include "Mujoco_Inverted_Pendulum_v4.h"
 #include "Mujoco_Inverted_Double_Pendulum_v4.h"
 #include "Mujoco_Half_Cheetah_v4.h"
+#include "Mujoco_Half_Cheetah_Hurdles_v4.h"
 #include "Mujoco_Reacher_v4.h"
+#include "FastSim_Maze.h"
+#include "FastSim_Gradient.h"
 #include "Mujoco_Hopper_v4.h"
 #include "Mujoco_Humanoid_Standup_v4.h"
 
@@ -30,10 +33,13 @@ TaskEnv* TaskEnvFactory::createTask(const std::string& name, std::unordered_map<
         {"Pitch", [](std::unordered_map<std::string, std::any>&) { return new RecursiveForecast("Pitch"); }},
         {"PitchBach", [](std::unordered_map<std::string, std::any>&) { return new RecursiveForecast("PitchBach"); }},
         {"Bach", [](std::unordered_map<std::string, std::any>&) { return new RecursiveForecast("Bach"); }},
+        {"FastSimMaze", [](std::unordered_map<std::string, std::any>& params) { return new FastSim_Maze(params); }},
+        {"FastSimGradient", [](std::unordered_map<std::string, std::any>& params) { return new FastSim_Gradient(params); }},
         {"Mujoco_Ant_v4", [](std::unordered_map<std::string, std::any>& params) { return new Mujoco_Ant_v4(params); }},
         {"Mujoco_Inverted_Pendulum_v4", [](std::unordered_map<std::string, std::any>& params) { return new Mujoco_Inverted_Pendulum_v4(params); }},
         {"Mujoco_Inverted_Double_Pendulum_v4", [](std::unordered_map<std::string, std::any>& params) { return new Mujoco_Inverted_Double_Pendulum_v4(params); }},
         {"Mujoco_Half_Cheetah_v4", [](std::unordered_map<std::string, std::any>& params) { return new Mujoco_Half_Cheetah_v4(params); }},
+        {"Mujoco_Half_Cheetah_Hurdles_v4", [](std::unordered_map<std::string, std::any>& params) { return new Mujoco_Half_Cheetah_Hurdles_v4(params); }},
         {"Mujoco_Reacher_v4", [](std::unordered_map<std::string, std::any>& params) { return new Mujoco_Reacher_v4(params); }},
         {"Mujoco_Hopper_v4", [](std::unordered_map<std::string, std::any>& params) { return new Mujoco_Hopper_v4(params); }},
         {"Mujoco_Humanoid_Standup_v4", [](std::unordered_map<std::string, std::any>& params) { return new Mujoco_Humanoid_Standup_v4(params); }},

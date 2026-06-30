@@ -126,6 +126,80 @@ void ReadParameters(string file_name,
                     std::unordered_map<string, std::any> &params);
 inline double sigmoid(double x, double m) { return 1 / (1 + exp(-(m * x))); }
 inline double sigmoid(double x) { return 1 / (1 + exp(-x)); }
+
+// Scalar register layout for self-modifying programs:
+// S0 = bid, S1 = action, S2-S5 = swap/delete/add/point-mutation rates, S6 = decoy.
+constexpr size_t kBidRegister = 0;
+constexpr size_t kActionRegister = 1;
+constexpr size_t kSelfModifyingFirstRegister = 2;
+constexpr size_t kSelfModifyingRegisterCount = 4;
+constexpr size_t kSelfModifyingRequiredRegisterCount =
+    kSelfModifyingFirstRegister + kSelfModifyingRegisterCount;
+constexpr size_t kSelfModifyingDecoyRegister = kSelfModifyingRequiredRegisterCount;
+constexpr size_t kSelfModifyingMinScalarRegisters = kSelfModifyingDecoyRegister + 1;
+
+inline bool IsSelfModifyingRateRegister(int idx) {
+   return idx >= static_cast<int>(kSelfModifyingFirstRegister) &&
+          idx < static_cast<int>(kSelfModifyingRequiredRegisterCount);
+}
+
+// Self-modifying programs store mutation-rate tendencies as raw values in S2-S5.
+// Mutation and logging consume a bounded probability readout from these values.
+constexpr double kSelfModifyingProbabilityEpsilon = 1e-6;
+constexpr double kSelfModifyingRateTemperature = 1.0;
+constexpr double kSelfModifyingBoundaryRaw = 20.0;
+// Gaussian step size applied in probability space when evolving S2-S5 constants.
+constexpr double kSelfModifyingRateProbabilityMutationStdDev = 0.02;
+
+inline double ClampSelfModifyingProbability(double value) {
+   return std::isfinite(value) ? std::clamp(value, 0.0, 1.0) : 0.0;
+}
+
+inline double StableSigmoid(double value) {
+   if (!std::isfinite(value)) return 0.0;
+   if (value >= 0.0) {
+      const double z = std::exp(-value);
+      return 1.0 / (1.0 + z);
+   }
+   const double z = std::exp(value);
+   return z / (1.0 + z);
+}
+
+inline double SelfModifyingRawTendencyToProbability(double value) {
+   return kSelfModifyingProbabilityEpsilon +
+          (1.0 - 2.0 * kSelfModifyingProbabilityEpsilon) *
+              StableSigmoid(value / kSelfModifyingRateTemperature);
+}
+
+inline double SelfModifyingProbabilityToRawTendency(double value) {
+   const double p = ClampSelfModifyingProbability(value);
+   if (p <= kSelfModifyingProbabilityEpsilon) {
+      return -kSelfModifyingBoundaryRaw * kSelfModifyingRateTemperature;
+   }
+   if (p >= 1.0 - kSelfModifyingProbabilityEpsilon) {
+      return kSelfModifyingBoundaryRaw * kSelfModifyingRateTemperature;
+   }
+
+   const double y =
+       (p - kSelfModifyingProbabilityEpsilon) /
+       (1.0 - 2.0 * kSelfModifyingProbabilityEpsilon);
+   return kSelfModifyingRateTemperature * std::log(y / (1.0 - y));
+}
+
+inline double SanitizeSelfModifyingRawTendency(double value) {
+   return std::isfinite(value) ? value : -kSelfModifyingBoundaryRaw;
+}
+
+inline double MutateSelfModifyingRateConstant(double raw_value,
+                                              std::mt19937& rng) {
+   const double probability = SelfModifyingRawTendencyToProbability(
+       SanitizeSelfModifyingRawTendency(raw_value));
+   std::normal_distribution<double> noise(
+       0.0, kSelfModifyingRateProbabilityMutationStdDev);
+   const double mutated_probability =
+       ClampSelfModifyingProbability(probability + noise(rng));
+   return SelfModifyingProbabilityToRawTendency(mutated_probability);
+}
 double stdDev(std::vector<double>);
 int stringToInt(string);
 long stringToLong(string);

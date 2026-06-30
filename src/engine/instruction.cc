@@ -437,12 +437,22 @@ void instruction::SetupOps() {
       {MemoryEigen::kVectorType_, MemoryEigen::kVectorType_};
   op_functions_[OBS_BUFF_SLICE_OP_] = {&instruction::ExecuteObsBuffSliceOp};
   op_names_[OBS_BUFF_SLICE_OP_] = "OBS_BUFF_SLICE_OP";
+
+  op_signatures_[SCALAR_ACCUM_OP_] = {
+    MemoryEigen::kScalarType_, MemoryEigen::kScalarType_};
+    op_functions_[SCALAR_ACCUM_OP_] = (&instruction::ExecuteScalarAccumOp);
+    op_names_[SCALAR_ACCUM_OP_] = "SCALAR_ACCUM_OP";
+
+  op_signatures_[VECTOR_ACCUM_OP_] = {
+      MemoryEigen::kVectorType_, MemoryEigen::kVectorType_};
+  op_functions_[VECTOR_ACCUM_OP_] = (&instruction::ExecuteVectorAccumOp);
+  op_names_[VECTOR_ACCUM_OP_] = "VECTOR_ACCUM_OP";
 }
 
 // Constructor
 instruction::instruction(std::unordered_map<string, std::any> &params,
-                         mt19937 &rng) {
-  memIndices_ = std::any_cast<int>(params["n_memories"]);
+                         mt19937 &rng, int n_memories) {
+  memIndices_ = n_memories;
   rng_ = rng;
 }
 
@@ -470,10 +480,10 @@ instruction::instruction(instruction &i) {
 
 void instruction::Mutate(bool randomize, vector<bool>& legal_ops,
                          int observation_buff_size, mt19937& rng) {
-   const int max_index = 1000000;  // TODO(skelly): fix magic
+   const int max_index = std::max(0, memIndices_ - 1);  // maximum valid memory index
    auto dis_index = std::uniform_int_distribution<>(0, max_index);
    if (randomize) {  // Randomly set each part of this instruction.
-      std::uniform_int_distribution<> dis(0, 1);
+      std::uniform_int_distribution<> dis(0, 2);
       in1Src_ = dis(rng);
       in2Src_ = dis(rng);
 
@@ -492,10 +502,10 @@ void instruction::Mutate(bool randomize, vector<bool>& legal_ops,
    } else {  // Randomly change one part of this instruction.
       std::uniform_int_distribution<> dis(0, 7);
       int i = dis(rng);
-      if (i == 0) {  // Change in1 src to private memory or observation.
-         MutateInt(in1Src_, 0, 1, rng);
-      } else if (i == 1) {  // Change in2 src to private memory or observation.
-         MutateInt(in2Src_, 0, 1, rng);
+      if (i == 0) {  // Change in1 src to working, observation, or const.
+         MutateInt(in1Src_, 0, 2, rng);
+      } else if (i == 1) {  // Change in2 src to working, observation, or const.
+         MutateInt(in2Src_, 0, 2, rng);
       } else if (i == 2) {  // Change out index.
          MutateInt(outIdx_, 0, max_index, rng);
       } else if (i == 3) {  // Change operation.
@@ -527,4 +537,150 @@ int instruction::GetOpCodeFromName(const std::string& name) {
         }
     }
     return -1;  // Return an invalid opcode if not found
+}
+// Returns estimated FLOPs
+double instruction::GetOperationFLOPs(int op, int memory_size) {
+    const double n = static_cast<double>(memory_size);
+    const double n2 = n * n;
+    const double n3 = n * n * n;
+
+    switch (op) {
+        case SCALAR_SUM_OP_:
+        case SCALAR_DIFF_OP_:
+        case SCALAR_PRODUCT_OP_:
+        case SCALAR_MIN_OP_:
+        case SCALAR_MAX_OP_:
+        case SCALAR_ABS_OP_:
+        case SCALAR_HEAVYSIDE_OP_:
+        case SCALAR_CONDITIONAL_OP_:
+        case SCALAR_ACCUM_OP_:
+            return 1.0;
+
+        case SCALAR_DIVISION_OP_:
+        case SCALAR_RECIPROCAL_OP_:
+            return 5.0;
+
+        case SCALAR_SQR_OP_:
+        case SCALAR_CUBE_OP_:
+            return 2.0;
+
+        case SCALAR_SQRT_OP_:
+            return 5.0;
+
+        case SCALAR_POW_OP_:
+            return 15.0;
+
+        case SCALAR_SIN_OP_:
+        case SCALAR_COS_OP_:
+        case SCALAR_TAN_OP_:
+        case SCALAR_ARCSIN_OP_:
+        case SCALAR_ARCCOS_OP_:
+        case SCALAR_ARCTAN_OP_:
+        case SCALAR_TANH_OP_:
+        case SCALAR_EXP_OP_:
+        case SCALAR_LOG_OP_:
+            return 10.0;
+
+        case SCALAR_VECTOR_PRODUCT_OP_:
+        case SCALAR_BROADCAST_OP_:
+            return n;
+
+        case VECTOR_SUM_OP_:
+        case VECTOR_ACCUM_OP_:
+        case VECTOR_DIFF_OP_:
+        case VECTOR_PRODUCT_OP_:
+        case VECTOR_MIN_OP_:
+        case VECTOR_MAX_OP_:
+        case VECTOR_ABS_OP_:
+        case VECTOR_HEAVYSIDE_OP_:
+            return n;
+
+        case VECTOR_DIVISION_OP_:
+        case VECTOR_RECIPROCAL_OP_:
+            return 5.0 * n;
+
+        case VECTOR_NORM_OP_:
+            return 2.0 * n + 5.0; 
+
+        case VECTOR_INNER_PRODUCT_OP_:
+            return 2.0 * n; 
+
+        case VECTOR_OUTER_PRODUCT_OP_:
+            return n2;
+
+        case VECTOR_MEAN_OP_:
+            return n + 5.0; 
+
+        case VECTOR_ST_DEV_OP_:
+            return 3.0 * n + 10.0; 
+
+        case SCALAR_MATRIX_PRODUCT_OP_:
+            return n2;
+
+        case MATRIX_SUM_OP_:
+        case MATRIX_DIFF_OP_:
+        case MATRIX_PRODUCT_OP_:
+        case MATRIX_MIN_OP_:
+        case MATRIX_MAX_OP_:
+        case MATRIX_ABS_OP_:
+        case MATRIX_HEAVYSIDE_OP_:
+        case MATRIX_TRANSPOSE_OP_:
+            return n2;
+
+        case MATRIX_DIVISION_OP_:
+        case MATRIX_RECIPROCAL_OP_:
+            return 5.0 * n2;
+
+        case MATRIX_NORM_OP_:
+            return 2.0 * n2 + 5.0;
+
+        case MATRIX_COLUMN_NORM_OP_:
+        case MATRIX_ROW_NORM_OP_:
+            return 2.0 * n2 + 5.0 * n;
+
+        case MATRIX_VECTOR_PRODUCT_OP_:
+            return 2.0 * n2; 
+
+        case MATRIX_MATRIX_PRODUCT_OP_:
+            return 2.0 * n3; 
+
+        case MATRIX_MEAN_OP_:
+            return n2 + 5.0;
+
+        case MATRIX_ROW_MEAN_OP_:
+            return n2 + 5.0 * n;
+
+        case MATRIX_ST_DEV_OP_:
+        case MATRIX_ROW_ST_DEV_OP_:
+            return 3.0 * n2 + 10.0;
+
+        case VECTOR_COLUMN_BROADCAST_OP_:
+        case VECTOR_ROW_BROADCAST_OP_:
+            return n2; 
+
+        case SCALAR_CONST_SET_OP_:
+        case SCALAR_UNIFORM_SET_OP_:
+        case SCALAR_GAUSSIAN_SET_OP_:
+            return 1.0;
+
+        case VECTOR_CONST_SET_OP_:
+        case VECTOR_UNIFORM_SET_OP_:
+        case VECTOR_GAUSSIAN_SET_OP_:
+            return n;
+
+        case MATRIX_CONST_SET_OP_:
+        case MATRIX_UNIFORM_SET_OP_:
+        case MATRIX_GAUSSIAN_SET_OP_:
+            return n2;
+
+        case SCALAR_VECTOR_ASSIGN_OP_:
+        case SCALAR_MATRIX_ASSIGN_OP_:
+            return 1.0;
+
+        case OBS_BUFF_SLICE_OP_:
+            return n;
+
+        default:
+            return 1.0;
+    }
 }

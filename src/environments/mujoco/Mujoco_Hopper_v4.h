@@ -8,9 +8,9 @@
 class Mujoco_Hopper_v4 : public MujocoEnv {
   public:
    // Parameters
-   double forward_reward_weight_ = 1.0;
+   double forward_reward_weight = 1.0;
    double control_cost_weight_ = 1e-3;
-   double healthy_reward_ = 0.0;
+   double healthy_reward_ = 1.0;
    bool terminate_when_unhealthy_ = true;
    std::vector<double> healthy_state_range_;
    std::vector<double> healthy_z_range_;
@@ -24,6 +24,7 @@ class Mujoco_Hopper_v4 : public MujocoEnv {
       n_eval_validation_ = std::any_cast<int>(params["mj_n_eval_validation"]);
       n_eval_test_ = std::any_cast<int>(params["mj_n_eval_test"]);
       max_step_ = std::any_cast<int>(params["mj_max_timestep"]);
+      max_sim_steps_ = max_step_ * frame_skip_;
       control_cost_weight_ =
           std::any_cast<double>(params["mj_reward_control_weight"]);
       model_path_ =
@@ -32,7 +33,6 @@ class Mujoco_Hopper_v4 : public MujocoEnv {
       healthy_state_range_ = {-100.0, 100.0};
       healthy_z_range_ = {0.7, float(INFINITY)};
       healthy_angle_range_ = {-0.2, 0.2};
-      frame_skip_ = 4;
       initialize_simulation();
 
       obs_size_ = 12;
@@ -88,21 +88,24 @@ class Mujoco_Hopper_v4 : public MujocoEnv {
    }
 
    bool terminal() {
-      return step_ >= max_step_ || (terminate_when_unhealthy_ && !is_healthy());
+      return time_limit_reached() ||
+             (terminate_when_unhealthy_ && !is_healthy());
    }
 
    Results sim_step(std::vector<double>& action) {
       auto x_pos_before = d_->qpos[0];
       do_simulation(action, frame_skip_);
       auto x_pos_after = d_->qpos[0];
-      auto x_vel = (x_pos_after - x_pos_before) / m_->opt.timestep;
+      // Match Gymnasium: dt = model timestep * frame_skip.
+      const double dt = m_->opt.timestep * std::max(1, frame_skip_);
+      auto x_vel = (x_pos_after - x_pos_before) / dt;
       auto ctrl_cost = control_cost(action);
 
-      auto forward_reward = forward_reward_weight_ * x_vel;
-      // auto rewards = forward_reward + healthy_reward();  
+      auto forward_reward = forward_reward_weight * x_vel;
+      auto rewards = forward_reward + healthy_reward();
 
       auto costs = ctrl_cost;
-      auto reward = forward_reward - costs;
+      auto reward = rewards - costs;
 
       get_obs(state_);
       step_++;
@@ -126,7 +129,7 @@ class Mujoco_Hopper_v4 : public MujocoEnv {
       }
    }
 
-   void reset(mt19937& rng) {
+   void reset(mt19937& rng, int& episode_number) {
       std::uniform_real_distribution<> dis_pos(-reset_noise_scale_,
                                                reset_noise_scale_);
       std::vector<double> qpos(m_->nq);
@@ -141,6 +144,7 @@ class Mujoco_Hopper_v4 : public MujocoEnv {
       mj_resetData(m_, d_);
       set_state(qpos, qvel);
       step_ = 0;
+      sim_steps_elapsed_ = 0;
       get_obs(state_);
    };
 };

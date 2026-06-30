@@ -32,7 +32,7 @@ class EvalData {
     std::string checkpointString;    // For passing tpg data
     bool partially_observable;  // whether or not the task is partially
                                 // observable
-
+                                
     /* Per individual eval data ***********************************************/
     ofstream dbg_out;
     team *tm;  // Current team to evaluate
@@ -40,6 +40,8 @@ class EvalData {
     std::string eval_result;       // For passing eval results between mpi procs
     int episode;              // Episode number
     std::vector<double> fingerprint;  // Behaviour fingerprint (usually not used)
+    double pred_error = 0;
+    double running_mean = 0;
 
     // double Stats to track for each evaluation
     // Currently this vec will contain:

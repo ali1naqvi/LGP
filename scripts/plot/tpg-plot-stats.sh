@@ -330,5 +330,4 @@ Rscript  $TPG/scripts/plot/plot-tpg-trainingCurves.R tpg-st-Lsize.csv "Program p
 
 pdfunite 0*.pdf plots/${wd}_p${phs}.pdf
 rm 0*.pdf
-rm *csv
-
+#rm *csv

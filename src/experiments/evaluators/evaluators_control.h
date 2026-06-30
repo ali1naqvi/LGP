@@ -8,19 +8,19 @@
 /******************************************************************************/
 inline void MaybeStartAnimation(TPG &tpg) {
 #if !defined(CCANADA) && !defined(HPCC)
-    if (tpg.GetParam<int>("animate")) {
-        double _width = 1200;
-        double _height = 1200;
-        int argc = 1;
-        char *argv[1] = {(char *)"null"};
-        glutInit(&argc, argv);
-        // glutInitDisplayMode(GLUT_SINGLE |GLUT_RGB);
-        glutInitWindowSize(_width, _height);
-        glutInitWindowPosition(100, 100);
-        glutCreateWindow("ClassicControl");
-        // glutHideWindow();
-        glScalef(0.5, 0.5, 0.0);
-    }
+   if (tpg.GetParam<int>("animate")) {
+      double _width = 1200;
+      double _height = 1200;
+      int argc = 1;
+      char* argv[1] = {(char*)"null"};
+      glutInit(&argc, argv);
+      // glutInitDisplayMode(GLUT_SINGLE |GLUT_RGB);
+      glutInitWindowSize(_width, _height);
+      glutInitWindowPosition(100, 100);
+      glutCreateWindow("ClassicControl");
+      // glutHideWindow();
+      glScalef(0.5, 0.5, 0.0);
+   }
 #endif
 }
 
@@ -28,16 +28,16 @@ inline void MaybeStartAnimation(TPG &tpg) {
 inline void MaybeAnimateStep(EvalData &eval) {
     ClassicControlEnv *task = dynamic_cast<ClassicControlEnv *>(eval.task);
 #if !defined(CCANADA)
-    if (eval.animate) {
-        task->DisplayFunction(eval.episode, WrapDiscreteAction(eval),
-                               WrapContinuousAction(eval));
-        char filename[80];
-        sprintf(filename, "%s_%05d_%03d_%05d_%05d_%05d.tga", "replay/frames/gl",
-                eval.save_frame++, eval.episode, eval.task->step_, 0, 0);
-        task->SaveScreenshotToFile(filename, 1200, 1200);
-        // this_thread::sleep_for(std::chrono::milliseconds(10)); TODO(skelly):
-        // add
-    }
+   if (eval.animate) {
+      task->DisplayFunction(eval.episode, WrapDiscreteAction(eval),
+                            WrapContinuousAction(eval));
+      char filename[80];
+      sprintf(filename, "%s_%05d_%03d_%05d_%05d_%05d.tga", "replay/frames/gl",
+              eval.save_frame++, eval.episode, eval.task->step_, 0, 0);
+      task->SaveScreenshotToFile(filename, 1200, 1200);
+      // this_thread::sleep_for(std::chrono::milliseconds(10)); TODO(skelly):
+      // add
+   }
 #endif
 }
 
@@ -49,7 +49,9 @@ inline void EvalControl(TPG &tpg, EvalData &eval) {
     eval.obs = new state(tpg.n_input_[tpg.GetState("active_task")]);
     eval.obs->Set(eval.task->GetObsVec(eval.partially_observable));
     while (!eval.task->Terminal()) {
-        tpg.GetAction(eval);
+        tpg.GetAction(
+          eval, tpg.rngs_[AUX_SEED],
+          tpg.params_, tpg.prev_prog_history_);
         MaybeAnimateStep(eval);
         TaskEnv::Results r =
             eval.task->Update(WrapDiscreteAction(eval),
@@ -63,7 +65,6 @@ inline void EvalControl(TPG &tpg, EvalData &eval) {
     delete eval.obs;
 }
 
-/******************************************************************************/
 inline void EvalControlViz(TPG &tpg, EvalData &eval,
                     vector<map<long, double>> &teamUseMapPerTask,
                     set<team *, teamIdComp> &teams_visitedAllTasks,
@@ -74,7 +75,9 @@ inline void EvalControlViz(TPG &tpg, EvalData &eval,
     eval.obs = new state(tpg.n_input_[tpg.GetState("active_task")]);
     eval.obs->Set(eval.task->GetObsVec(eval.partially_observable));
     while (!eval.task->Terminal()) {
-        tpg.GetAction(eval);
+        tpg.GetAction(
+          eval, tpg.rngs_[AUX_SEED],
+          tpg.params_, tpg.prev_prog_history_);
         eval.n_prediction++;
         for (auto tm : eval.teams_visited) {
             if (teamUseMapPerTask[tpg.state_["active_task"]].find(tm->id_) ==

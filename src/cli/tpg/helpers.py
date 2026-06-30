@@ -2,6 +2,7 @@ import pandas as pd
 import subprocess
 import os
 import click
+import re
 
 def get_metrics_from_csv(csv_file):
     # Read the CSV file
@@ -19,24 +20,64 @@ def get_metrics_from_csv(csv_file):
     # Extract only the columns of interest
     return result_row[["best_fitness", "generation", "team_id"]].to_dict()   
 
-def get_checkpoint_values(seed_tpg):
-    # First command to get checkpoint_in_phase
-    cmd_phase = (
-        f"grep -iRl end checkpoints/cp.*.{seed_tpg}.*.rslt | "
-        "cut -d '.' -f 4 | sort -n | tail -n 1"
-    )
-    # Run the command and decode its output
-    checkpoint_in_phase = subprocess.check_output(cmd_phase, shell=True,
-                                                text=True).strip()
+def get_param_from_yaml_file(parameters_file: str, key: str):
+    if not os.path.exists(parameters_file):
+        raise click.ClickException(f"Parameters file not found: {parameters_file}")
 
-    # Second command to get checkpoint_in_t using the obtained checkpoint_in_phase
+    # Match e.g. "mj_n_eval_train: 3" or "mj_model_path: \"$TPG/...\""
+    pattern = re.compile(rf"^\s*{re.escape(key)}\s*:\s*(.*?)\s*(?:#.*)?$", re.MULTILINE)
+    with open(parameters_file, "r", encoding="utf-8") as f:
+        text = f.read()
+
+    m = pattern.search(text)
+    if not m:
+        raise click.ClickException(f"Could not find '{key}:' in {parameters_file}")
+
+    raw = m.group(1).strip()
+    # Strip surrounding quotes
+    if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
+        raw = raw[1:-1]
+    return raw
+
+def get_int_param_from_yaml_file(parameters_file: str, key: str) -> int:
+    raw = get_param_from_yaml_file(parameters_file, key)
+    try:
+        return int(raw)
+    except ValueError as e:
+        raise click.ClickException(
+            f"Expected integer for '{key}' in {parameters_file}, got: {raw}"
+        ) from e
+
+def get_replay_eval_param_names(parameters_file: str, task_to_replay: int = 0):
+    active_tasks = get_param_from_yaml_file(parameters_file, "active_tasks")
+    tasks = [task.strip() for task in active_tasks.split(",") if task.strip()]
+    if not tasks:
+        raise click.ClickException(f"No active tasks configured in {parameters_file}")
+    if task_to_replay < 0 or task_to_replay >= len(tasks):
+        raise click.ClickException(
+            f"task_to_replay={task_to_replay} is out of range for active_tasks={active_tasks}"
+        )
+    task_name = tasks[task_to_replay]
+    if task_name.startswith("Mujoco"):
+        return "mj_n_eval_train", "mj_n_eval_test"
+    if task_name == "FastSimGradient":
+        return "gradient_n_eval_train", "gradient_n_eval_test"
+    if task_name.startswith("FastSimMaze"):
+        return "maze_n_eval_train", "maze_n_eval_test"
+    if task_name == "RecursiveForecast":
+        return "forecast_n_eval_train", "forecast_n_eval_test"
+
+    raise click.ClickException(
+        f"Don't know which replay eval-count parameter to use for task '{task_name}'"
+    )
+
+def get_checkpoint_values(seed_tpg, checkpoint_phase=0):
+    checkpoint_in_phase = str(int(checkpoint_phase))
     cmd_t = (
         f"grep -iRl end checkpoints/cp.*.{seed_tpg}.{checkpoint_in_phase}.rslt | "
         "cut -d '.' -f 2 | sort -n | tail -n 1"
     )
-    checkpoint_in_t = subprocess.check_output(cmd_t, shell=True,
-                                            text=True).strip()
-    
+    checkpoint_in_t = subprocess.check_output(cmd_t, shell=True, text=True).strip()
     return checkpoint_in_phase, checkpoint_in_t
 
 def create_environment_directories(TPG: str, env: str):
