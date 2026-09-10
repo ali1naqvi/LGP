@@ -44,13 +44,19 @@ find_package(TBB REQUIRED)
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 find_package(yaml-cpp REQUIRED)
 
-include(FetchContent)
-FetchContent_Declare(
-  Catch2
-  GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-  GIT_TAG        v3.4.0 
-)
-FetchContent_MakeAvailable(Catch2)
+# MuJoCo is only needed by the experiment executable.  Keep the core engine
+# and non-MuJoCo environments buildable on developer machines that do not
+# have that optional SDK installed.
+option(TPG_BUILD_EXPERIMENTS "Build the MuJoCo-backed experiment executable" ON)
+if(TPG_BUILD_EXPERIMENTS)
+  set(_mujoco_hint "$ENV{MUJOCO}")
+  find_path(MUJOCO_INCLUDE_DIR mujoco/mujoco.h HINTS "${_mujoco_hint}/include")
+  find_library(MUJOCO_LIBRARY mujoco HINTS "${_mujoco_hint}/lib")
+  if(NOT MUJOCO_INCLUDE_DIR OR NOT MUJOCO_LIBRARY)
+    message(WARNING "MuJoCo was not found; skipping TPGExperimentMPI. Set MUJOCO to a valid SDK root to build it.")
+    set(TPG_BUILD_EXPERIMENTS OFF)
+  endif()
+endif()
 
 file(GLOB_RECURSE LIBFASTSIM_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/modules/libfastsim/src/*.cpp"
@@ -62,6 +68,7 @@ add_library(libfastsim STATIC ${LIBFASTSIM_SOURCES})
 target_include_directories(libfastsim PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/libfastsim/src
 )
+target_link_libraries(libfastsim PUBLIC Boost::boost)
 
 add_subdirectory(src)
 # add_subdirectory(tests)

@@ -199,6 +199,7 @@ class MemoryEigen {
 
    std::string ToString(long prog_id) {
       std::ostringstream oss;
+      oss << std::setprecision(std::numeric_limits<double>::max_digits10);
       oss << "MemoryEigen:" << prog_id << ":" << type_ << ":" << n_memories_
           << ":" << memory_size_;
       if (type_ == kScalarType_) {

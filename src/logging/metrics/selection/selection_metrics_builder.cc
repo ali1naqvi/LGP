@@ -66,23 +66,25 @@ SelectionMetricsBuilder& SelectionMetricsBuilder::with_best_agent_flops(double f
 
 SelectionMetricsBuilder& SelectionMetricsBuilder::with_elite_avg_start_rates(
     double swap_rate, double delete_rate, double add_rate, double mutate_rate,
-    double decoy_rate) {
+    double redundancy_rate, double decoy_rate) {
     elite_avg_start_rate_swap = swap_rate;
     elite_avg_start_rate_delete = delete_rate;
     elite_avg_start_rate_add = add_rate;
     elite_avg_start_rate_mutate = mutate_rate;
-    elite_avg_start_rate_s5 = decoy_rate;
+    elite_avg_start_rate_redundancy = redundancy_rate;
+    elite_avg_start_rate_decoy = decoy_rate;
     return *this;
 }
 
 SelectionMetricsBuilder& SelectionMetricsBuilder::with_elite_avg_output_rates(
     double swap_rate, double delete_rate, double add_rate, double mutate_rate,
-    double decoy_rate) {
+    double redundancy_rate, double decoy_rate) {
     elite_avg_output_rate_swap = swap_rate;
     elite_avg_output_rate_delete = delete_rate;
     elite_avg_output_rate_add = add_rate;
     elite_avg_output_rate_mutate = mutate_rate;
-    elite_avg_output_rate_s5 = decoy_rate;
+    elite_avg_output_rate_redundancy = redundancy_rate;
+    elite_avg_output_rate_decoy = decoy_rate;
     return *this;
 }
 
@@ -172,8 +174,12 @@ double SelectionMetricsBuilder::get_elite_avg_start_rate_mutate() const {
     return elite_avg_start_rate_mutate;
 }
 
-double SelectionMetricsBuilder::get_elite_avg_start_rate_s5() const {
-    return elite_avg_start_rate_s5;
+double SelectionMetricsBuilder::get_elite_avg_start_rate_redundancy() const {
+    return elite_avg_start_rate_redundancy;
+}
+
+double SelectionMetricsBuilder::get_elite_avg_start_rate_decoy() const {
+    return elite_avg_start_rate_decoy;
 }
 
 double SelectionMetricsBuilder::get_elite_avg_output_rate_swap() const {
@@ -192,8 +198,12 @@ double SelectionMetricsBuilder::get_elite_avg_output_rate_mutate() const {
     return elite_avg_output_rate_mutate;
 }
 
-double SelectionMetricsBuilder::get_elite_avg_output_rate_s5() const {
-    return elite_avg_output_rate_s5;
+double SelectionMetricsBuilder::get_elite_avg_output_rate_redundancy() const {
+    return elite_avg_output_rate_redundancy;
+}
+
+double SelectionMetricsBuilder::get_elite_avg_output_rate_decoy() const {
+    return elite_avg_output_rate_decoy;
 }
 
 

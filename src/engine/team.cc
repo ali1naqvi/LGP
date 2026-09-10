@@ -49,6 +49,9 @@ string team::ToString() const {
       }
       oss << endl;
    }
+   if (population_role_ != POPULATION_ROLE_DEFAULT) {
+      oss << "population_role:" << id_ << ":" << population_role_ << endl;
+   }
    
    // if (!HebbianMap.weights.empty()) {
    //  for (const auto& [prevProgID, currMap] : HebbianMap.weights) {
@@ -70,13 +73,15 @@ void team::InitMemory(map<long, team*>& teamMap,
    set<team*, teamIdComp> teams;
    set<RegisterMachine*, RegisterMachineIdComp> RegisterMachines;
    GetAllNodes(teamMap, teams, RegisterMachines);
-   const auto self_modifying = params.find("self_modifying");
-   const bool use_self_modifying_constants = self_modifying != params.end() && std::any_cast<int>(self_modifying->second) != 0;
    for (auto prog : RegisterMachines) {
+      const bool use_self_modifying_constants = prog->self_modifying_;
+      auto program_params = params;
+      program_params["self_modifying"] =
+          use_self_modifying_constants ? 1 : 0;
       if (use_self_modifying_constants ||
           !isEqual(std::any_cast<double>(params["p_memory_mu_const"]), 0.0)) {
          prog->use_evolved_const_ = true;
-         prog->ConfigureSelfModifyingRegisters(params, false);
+         prog->ConfigureSelfModifyingRegisters(program_params, false);
          if (use_self_modifying_constants) {
             // Preserve the rate phenotype generated in the preceding episode.
             prog->CopyPrivateConstToWorkingMemoryPreservingSelfModifyingRegisters();
@@ -108,6 +113,7 @@ void team::clone(map<long, phyloRecord>& phyloGraph, team** tm) {
    (*tm)->fitnessBins(fitnessBins_);
    (*tm)->cloneId_ = id_;
    (*tm)->obs_index_ = obs_index_; //TODO(ali) double check
+   (*tm)->population_role_ = population_role_;
    clones_++;
 }
 

@@ -14,6 +14,7 @@ target_include_directories(engine
     ${CMAKE_CURRENT_SOURCE_DIR}/../experiments
     ${CMAKE_CURRENT_SOURCE_DIR}/../experiments/evaluators
     ${CMAKE_CURRENT_SOURCE_DIR}/../environments
+    ${CMAKE_CURRENT_SOURCE_DIR}/../environments/xpredprey
     ${CMAKE_CURRENT_SOURCE_DIR}/../logging
     ${CMAKE_CURRENT_SOURCE_DIR}/../logging/core
     ${CMAKE_CURRENT_SOURCE_DIR}/../logging/loggers

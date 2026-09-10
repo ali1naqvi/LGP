@@ -22,3 +22,6 @@ cli.add_command(commands.replay)
 cli.add_command(commands.clean)
 cli.add_command(commands.kill)
 cli.add_command(commands.debug)
+
+if __name__ == "__main__":
+    cli()

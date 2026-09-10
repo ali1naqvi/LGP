@@ -6,7 +6,7 @@ void SelectionStorage::init(const int& seed_tpg, const int& pid) {
     std::string filename = generate_filename("selection", seed_tpg, pid);
 
     file_.open(filename);
-    file_ << "generation,best_fitness,validation_fitness,team_id,team_size,age,fitness_value_for_selection,program_instruction_count,effective_program_instruction_count,best_agent_register_size,best_agent_effective_register_size,best_agent_flops,elite_avg_start_rate_swap,elite_avg_start_rate_delete,elite_avg_start_rate_add,elite_avg_start_rate_mutate,elite_avg_start_rate_s5,elite_avg_output_rate_swap,elite_avg_output_rate_delete,elite_avg_output_rate_add,elite_avg_output_rate_mutate,elite_avg_output_rate_s5,pareto_front_0_size,pareto_front_1_size,best_agent_pareto_rank,best_agent_crowding_dist,avg_complexity_front_0,best_agent_mean_register_similarity,best_agent_max_register_similarity,validation_register_efficiency_pearson,validation_register_efficiency_spearman,validation_register_efficiency_n";
+    file_ << "generation,best_fitness,validation_fitness,team_id,team_size,age,fitness_value_for_selection,program_instruction_count,effective_program_instruction_count,best_agent_register_size,best_agent_effective_register_size,best_agent_flops,elite_avg_start_rate_swap,elite_avg_start_rate_delete,elite_avg_start_rate_add,elite_avg_start_rate_mutate,elite_avg_start_rate_redundancy,elite_avg_start_rate_decoy,elite_avg_output_rate_swap,elite_avg_output_rate_delete,elite_avg_output_rate_add,elite_avg_output_rate_mutate,elite_avg_output_rate_redundancy,elite_avg_output_rate_decoy,pareto_front_0_size,pareto_front_1_size,best_agent_pareto_rank,best_agent_crowding_dist,avg_complexity_front_0,best_agent_mean_register_similarity,best_agent_max_register_similarity,validation_register_efficiency_pearson,validation_register_efficiency_spearman,validation_register_efficiency_n";
     
     appendOperationHeaders();
 
@@ -31,12 +31,14 @@ void SelectionStorage::append(const SelectionMetrics& metrics) {
           << metrics.elite_avg_start_rate_delete << ","
           << metrics.elite_avg_start_rate_add << ","
           << metrics.elite_avg_start_rate_mutate << ","
-          << metrics.elite_avg_start_rate_s5 << ","
+          << metrics.elite_avg_start_rate_redundancy << ","
+          << metrics.elite_avg_start_rate_decoy << ","
           << metrics.elite_avg_output_rate_swap << ","
           << metrics.elite_avg_output_rate_delete << ","
           << metrics.elite_avg_output_rate_add << ","
           << metrics.elite_avg_output_rate_mutate << ","
-          << metrics.elite_avg_output_rate_s5 << ","
+          << metrics.elite_avg_output_rate_redundancy << ","
+          << metrics.elite_avg_output_rate_decoy << ","
           << metrics.pareto_front_0_size << ","
           << metrics.pareto_front_1_size << ","
           << metrics.best_agent_pareto_rank << ","

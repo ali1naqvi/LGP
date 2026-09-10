@@ -126,7 +126,7 @@ double stdDev(vector<double> vec) {
    double mean = sum / vec.size();
    vector<double> diff(vec.size());
    transform(vec.begin(), vec.end(), diff.begin(),
-             bind2nd(std::minus<double>(), mean));
+             [mean](double value) { return value - mean; });
    double sq_sum = inner_product(diff.begin(), diff.end(), diff.begin(), 0.0);
    double stdev = sqrt(sq_sum / (vec.size() - 1));
    return stdev;

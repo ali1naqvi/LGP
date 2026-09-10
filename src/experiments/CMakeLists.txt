@@ -39,6 +39,7 @@ target_include_directories(TPGExperimentMPI
     ${CMAKE_CURRENT_SOURCE_DIR}/../environments/classic_control
     ${CMAKE_CURRENT_SOURCE_DIR}/../environments/mujoco
     ${CMAKE_CURRENT_SOURCE_DIR}/../environments/sequence
+    ${CMAKE_CURRENT_SOURCE_DIR}/../environments/xpredprey
     ${EIGEN3_INCLUDE_DIRS}
     ${Boost_INCLUDE_DIRS}
     ${CURL_INCLUDE_DIRS}
@@ -65,6 +66,7 @@ target_link_libraries(TPGExperimentMPI
     glut
     GLU
     OSMesa
+    xpredprey_simulator
 )
 
 # Set output directory for the executable to match the expected SCons path

@@ -50,7 +50,7 @@ class TaskEnv {
     virtual double MaxActionContinuous() const { return 0.0; }
     virtual void Reset(std::mt19937 &) { step_ = 0; }
     virtual Results Update(int, double, std::mt19937 &) { return {0.0, 0.0}; };
-    Results SimStep(std::vector<double> &action) { return {0.0, 0.0}; }
+    Results SimStep(std::vector<double> &) { return {0.0, 0.0}; }
     virtual bool Terminal() { return false; }
     int GetNumEval(int phase) {
         if (phase == 0)

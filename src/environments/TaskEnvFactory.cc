@@ -16,6 +16,7 @@
 #include "FastSim_Gradient.h"
 #include "Mujoco_Hopper_v4.h"
 #include "Mujoco_Humanoid_Standup_v4.h"
+#include "XPredPreyTask.h"
 
 TaskEnv* TaskEnvFactory::createTask(const std::string& name, std::unordered_map<std::string, std::any>& params) {
     static const std::map<std::string, CreatorFunc> registry = {
@@ -43,6 +44,7 @@ TaskEnv* TaskEnvFactory::createTask(const std::string& name, std::unordered_map<
         {"Mujoco_Reacher_v4", [](std::unordered_map<std::string, std::any>& params) { return new Mujoco_Reacher_v4(params); }},
         {"Mujoco_Hopper_v4", [](std::unordered_map<std::string, std::any>& params) { return new Mujoco_Hopper_v4(params); }},
         {"Mujoco_Humanoid_Standup_v4", [](std::unordered_map<std::string, std::any>& params) { return new Mujoco_Humanoid_Standup_v4(params); }},
+        {"XPredPrey", [](std::unordered_map<std::string, std::any>& params) { return new XPredPreyTask(params); }},
     };
 
     auto it = registry.find(name);

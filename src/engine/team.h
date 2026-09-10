@@ -2,6 +2,8 @@
 #define team_h
 
 #include <list>
+#include <algorithm>
+#include <iterator>
 #include <map>
 #include <queue>
 #include <set>
@@ -21,6 +23,10 @@
 // arbitrarily large, greater than max ALE frames/episode of 18000
 #define MAX_NCD_PROFILE_SIZE 20000
 
+#define POPULATION_ROLE_DEFAULT -1
+#define POPULATION_ROLE_PREDATOR 0
+#define POPULATION_ROLE_PREY 1
+
 using namespace std;
 
 class EvalData;
@@ -39,6 +45,8 @@ class team {
   inline int numAncestorIds() { return ancestorIds_.size(); }
   inline bool elite(int phase) const { return elite_[phase]; }
   inline void elite(int phase, bool e) { elite_[phase] = e; }
+  inline int populationRole() const { return population_role_; }
+  inline void populationRole(int role) { population_role_ = role; }
   inline string getBehaviourString(int seed, int phase) {
     string s = "";
     for (size_t task = 0; task < outcomes_.size(); task++)
@@ -325,6 +333,7 @@ class team {
    string task_code_;
    int pareto_rank_ = 0;
    double crowding_distance_ = 0.0;
+   int population_role_ = POPULATION_ROLE_DEFAULT;
    //sharedMemoryEigen team_memory_;  // Private shared memory for the programs in this team
 };
 

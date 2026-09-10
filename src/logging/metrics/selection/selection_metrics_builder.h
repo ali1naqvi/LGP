@@ -22,11 +22,13 @@ public:
                                                         double delete_rate,
                                                         double add_rate,
                                                         double mutate_rate,
+                                                        double redundancy_rate,
                                                         double decoy_rate);
     SelectionMetricsBuilder& with_elite_avg_output_rates(double swap_rate,
                                                          double delete_rate,
                                                          double add_rate,
                                                          double mutate_rate,
+                                                         double redundancy_rate,
                                                          double decoy_rate);
     SelectionMetricsBuilder& with_operations_use(std::vector<int> operations);
     
@@ -62,12 +64,14 @@ public:
     double get_elite_avg_start_rate_delete() const;
     double get_elite_avg_start_rate_add() const;
     double get_elite_avg_start_rate_mutate() const;
-    double get_elite_avg_start_rate_s5() const;
+    double get_elite_avg_start_rate_redundancy() const;
+    double get_elite_avg_start_rate_decoy() const;
     double get_elite_avg_output_rate_swap() const;
     double get_elite_avg_output_rate_delete() const;
     double get_elite_avg_output_rate_add() const;
     double get_elite_avg_output_rate_mutate() const;
-    double get_elite_avg_output_rate_s5() const;
+    double get_elite_avg_output_rate_redundancy() const;
+    double get_elite_avg_output_rate_decoy() const;
     std::string get_operations_use() const;
     
     // NSGA-II getters
@@ -104,12 +108,14 @@ private:
     double elite_avg_start_rate_delete = 0.0;
     double elite_avg_start_rate_add = 0.0;
     double elite_avg_start_rate_mutate = 0.0;
-    double elite_avg_start_rate_s5 = 0.0;
+    double elite_avg_start_rate_redundancy = 0.0;
+    double elite_avg_start_rate_decoy = 0.0;
     double elite_avg_output_rate_swap = 0.0;
     double elite_avg_output_rate_delete = 0.0;
     double elite_avg_output_rate_add = 0.0;
     double elite_avg_output_rate_mutate = 0.0;
-    double elite_avg_output_rate_s5 = 0.0;
+    double elite_avg_output_rate_redundancy = 0.0;
+    double elite_avg_output_rate_decoy = 0.0;
     std::string operations_use = "";
     
     // NSGA-II Pareto front metrics

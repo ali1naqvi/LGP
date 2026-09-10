@@ -64,6 +64,8 @@ def get_replay_eval_param_names(parameters_file: str, task_to_replay: int = 0):
         return "gradient_n_eval_train", "gradient_n_eval_test"
     if task_name.startswith("FastSimMaze"):
         return "maze_n_eval_train", "maze_n_eval_test"
+    if task_name == "XPredPrey":
+        return "xpredprey_n_eval_train", "xpredprey_n_eval_test"
     if task_name == "RecursiveForecast":
         return "forecast_n_eval_train", "forecast_n_eval_test"
 

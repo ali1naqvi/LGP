@@ -104,6 +104,21 @@ std::pair<std::vector<TaskEnv*>, std::vector<int>> initializeTasks(TPG& tpg) {
 
        tasks.push_back(task);
 
+      if (task->eval_type_ == "XPredPrey") {
+         // Both role policies receive one robot's 24 sensor values and emit
+         // two continuous wheel commands.
+         tpg.params_["n_input"] = std::string("24");
+         tpg.params_["n_discrete_action"] = 0;
+         tpg.params_["continuous_output"] = 2;
+         tpg.params_["memory_size"] = 2;
+         tpg.params_["min_memory_size"] = 2;
+         tpg.params_["max_memory_size"] = 2;
+         if (tpg.GetParam<int>("n_root") < 2) {
+            std::cerr << "XPredPrey requires n_root >= 2" << std::endl;
+            exit(1);
+         }
+      }
+
       // Configuration specific to this application
       if (tasks[tasks.size() - 1]->eval_type_ == "RecursiveForecast") {
       RecursiveForecast* task =
@@ -146,4 +161,3 @@ std::pair<std::vector<TaskEnv*>, std::vector<int>> initializeTasks(TPG& tpg) {
 
    return {tasks, taskIndices};
 }
-

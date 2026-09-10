@@ -169,7 +169,7 @@ inline vector<double> WrapScalarActionsMujoco(EvalData &eval) {
     vector<double> vec;
     vec.reserve(wm.size());
     for (size_t i = 0; i < wm.size(); ++i) {
-        // S6 is reserved as a neutral self-modification control. Preserve the
+        // S7 is reserved as a neutral self-modification control. Preserve the
         // action-vector shape, but never expose its evolving value to a task.
         if (eval.program_out->self_modifying_ &&
             i == kSelfModifyingDecoyRegister) {

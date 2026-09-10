@@ -16,6 +16,8 @@
 #include "evaluators_mujoco.h"
 #include "evaluators_maze.h"
 #include "evaluators_gradient.h"
+#include "evaluators_xpredprey.h"
+#include "xpredprey_eval_mpi.h"
 
 #include <boost/mpi.hpp>
 #include <chrono>
@@ -38,6 +40,9 @@ typedef void (*EvaluatorFunction)(TPG &, EvalData &);
 inline vector<team *> GetTeamsToEval(TPG &tpg, TaskEnv *task) {
   auto root_teams = tpg.GetRootTeamsInVec();
   vector<team *> teams_to_eval;
+  if (task->eval_type_ == "XPredPrey") {
+    return GetXPredPreyTeamsToEval(tpg, task);
+  }
   // Train and validate all teams.
   if (tpg.GetState("phase") != _TEST_PHASE) {
     for (auto tm : root_teams) {
@@ -113,14 +118,21 @@ inline bool NotDoneAndActive(EvalData &eval_data) {
 inline void evaluate_main(TPG& tpg, mpi::communicator& world,
                           std::vector<TaskEnv*>& all_tasks,
                           std::vector<int> eval_tasks) {
+   if (tpg.UsesXPredPreyCoevolution()) {
+      if (all_tasks.size() != 1 || eval_tasks.size() != 1 || eval_tasks.front() != 0)
+         throw std::runtime_error("XPredPrey coevolution requires exactly one task");
+      tpg.state_["active_task"] = 0;
+      EvaluateXPredPreyMPI(tpg, world, all_tasks.front());
+      return;
+   }
    int world_size_per_task = (world.size() - 1) / eval_tasks.size();
    // Assign agents to evaluator mpi jobs
    int mpi_job_id = 1;
    for (auto& task : eval_tasks) {
       tpg.state_["active_task"] = task;
       auto teams_to_eval = GetTeamsToEval(tpg, all_tasks[task]);
-      AssignTeamsToEvaluators(tpg, world, teams_to_eval, world_size_per_task,
-                              mpi_job_id);
+      AssignTeamsToEvaluators(tpg, world, teams_to_eval,
+                              world_size_per_task, mpi_job_id);
    }
    // Let the rest of the procs know they are not needed this round
    while (mpi_job_id <= (world.size() - 1)) {
@@ -142,17 +154,29 @@ inline void evaluate_main(TPG& tpg, mpi::communicator& world,
   each agent in the environment, and returns results to the main job.
  */
 inline void evaluator(TPG &tpg, mpi::communicator &world, vector<TaskEnv *> &tasks) {
+  if (tpg.UsesXPredPreyCoevolution()) {
+    XPredPreyEvaluatorMPI(tpg, world, tasks);
+    return;
+  }
   unordered_map<string, EvaluatorFunction> evaluator_map;
   evaluator_map["Control"] = &EvalControl;
   evaluator_map["RecursiveForecast"] = &EvalRecursiveForecast;
   evaluator_map["Mujoco"] = &EvalMujoco;
   evaluator_map["Maze"] = &EvalMaze;
   evaluator_map["Gradient"] = &EvalGradient;
+  evaluator_map["XPredPrey"] = &EvalXPredPrey;
   auto eval_data = tpg.InitEvalData();
   eval_data.world_rank = world.rank();
   eval_data.world_size = world.size();
-  while (NotDoneAndActive(eval_data)) {
+  while (true) {
     world.recv(0, 0, eval_data.checkpointString);
+    if (eval_data.checkpointString == "done") break;
+    if (eval_data.checkpointString == "x") {
+      // Idle ranks still participate in this phase's collective and remain
+      // available for subsequent phases/generations.
+      gather(world, std::string(), 0);
+      continue;
+    }
     if (NotDoneAndActive(eval_data)) {
       tpg.ReadCheckpoint(-1, _TRAIN_PHASE, true, eval_data.checkpointString);
       eval_data.teams = tpg.GetRootTeamsInVec();
@@ -232,6 +256,8 @@ inline void replayer(TPG &tpg, vector<TaskEnv *> &tasks) {
                   EvalMaze(tpg, eval_data);
               } else if (eval_data.task->eval_type_ == "Gradient"){
                   EvalGradient(tpg, eval_data);
+              } else if (eval_data.task->eval_type_ == "XPredPrey") {
+                  EvalXPredPrey(tpg, eval_data);
               }
               else
               {

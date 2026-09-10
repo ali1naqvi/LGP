@@ -38,6 +38,7 @@ class TPG {
     void Seed(size_t i, uint_fast32_t s);
     void InitExperimentTracking(APIClient *apiClient);
     void ExtinctionEvent();
+    bool UsesXPredPreyCoevolution() const;
 
     /* Map Elites*/
     void InitMapElitesArchive();
@@ -58,15 +59,25 @@ class TPG {
     team* TeamSelector_Tournament(vector<team*> &candidate_parent_teams);
     void ComputeParetoFronts(vector<team*>& teams);  // NSGA-II non-dominated sorting
     void GenerateNewTeams();
+    void GenerateNewXPredPreyTeams();
     void TeamMutator_ProgramOrder(team *team_to_mu);
     void TeamMutator_LambdaVariation(team *team_to_mu);
     void TeamMutator_DecayVariation(team *team_to_mu);
     void TeamMutator_AddPrograms(team *team_to_mu);
     void TeamMutator_RemovePrograms(team *team_to_mu);
     team *CloneTeam(team *team_to_clone);
-    RegisterMachine *CloneProgram(RegisterMachine *prog);
+    RegisterMachine *CloneProgram(
+        RegisterMachine *prog,
+        int population_role = POPULATION_ROLE_DEFAULT);
     // void ProgramMutator_Memory(RegisterMachine *&prog_to_mu);
-    void ProgramMutator_Instructions(RegisterMachine *prog_to_mu);
+    void ProgramMutator_Instructions(
+        RegisterMachine *prog_to_mu,
+        int population_role = POPULATION_ROLE_DEFAULT,
+        long team_id = -1, long parent_program_id = -1);
+    void RestoreSelfModifyingRates(const std::vector<std::string>& fields);
+    void WriteXPredPreyLog(bool reproduction, const std::string& row);
+    std::ofstream xpredprey_encounter_log_;
+    std::ofstream xpredprey_reproduction_log_;
     void ProgramMutator_ActionPointer(RegisterMachine *prog_to_mu, team *new_team,
                                       int &n_new_teams);
     void AddAncestorToPhylogeny(team *parent, team *new_team);
@@ -167,6 +178,9 @@ class TPG {
                              vector<vector<double>> &min_scores,
                              vector<vector<double>> &max_scores);
     void SetEliteTeams(vector<TaskEnv *> &tasks);
+    void SetXPredPreyEliteTeams(vector<TaskEnv *> &tasks);
+    std::unordered_map<std::string, std::any> ParamsForPopulationRole(
+        int population_role) const;
     void setOutcome(team *tm, string behav, vector<double> &rewards,
                     vector<int> &ints, long gtime);
     std::string PhylogenyToString();

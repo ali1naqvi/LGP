@@ -8,6 +8,7 @@
 #include "metrics/removal/removal_metrics.h"
 
 #include "EvalData.h"
+#include "XPredPreyLogging.h"
 #include <algorithm>
 #include <queue>   // for breadth‑first traversal of team pointers
 #include <filesystem>
@@ -33,6 +34,32 @@ TPG::TPG() {
 
 /******************************************************************************/
 TPG::~TPG() {}
+
+bool TPG::UsesXPredPreyCoevolution() const {
+   const auto active = params_.find("active_tasks");
+   return active != params_.end() && active->second.type() == typeid(std::string) &&
+          std::any_cast<std::string>(active->second) == "XPredPrey";
+}
+
+std::unordered_map<std::string, std::any> TPG::ParamsForPopulationRole(
+    int population_role) const {
+   auto role_params = params_;
+   if (!UsesXPredPreyCoevolution()) return role_params;
+
+   const char* role_key = nullptr;
+   if (population_role == POPULATION_ROLE_PREDATOR) {
+      role_key = "predator_population_self_modifying";
+   } else if (population_role == POPULATION_ROLE_PREY) {
+      role_key = "prey_population_self_modifying";
+   }
+   if (role_key != nullptr) {
+      const auto setting = params_.find(role_key);
+      if (setting != params_.end()) {
+         role_params["self_modifying"] = std::any_cast<int>(setting->second);
+      }
+   }
+   return role_params;
+}
 
 /******************************************************************************/
 void TPG::AddProgram(RegisterMachine* p) {
@@ -198,7 +225,9 @@ bool TPG::isElitePS(team* tm, int phase) {
 void TPG::MarkEffectiveCode() {
    for (auto prog : program_pop_) {
       prog.second->stateful_ = GetParam<int>("stateful");
-      prog.second->MarkIntrons(params_, prog.second->n_memories_);
+      auto program_params = params_;
+      program_params["self_modifying"] = prog.second->self_modifying_ ? 1 : 0;
+      prog.second->MarkIntrons(program_params, prog.second->n_memories_);
    }
 }
 
@@ -224,6 +253,10 @@ void TPG::ReadParameters(std::string file_name, std::unordered_map<std::string, 
        if (entry.second.IsMap()) {
            for (const auto& param : entry.second) {
                string key = param.first.as<string>(); // Flatten key
+               if (category == "predator_population" ||
+                   category == "prey_population") {
+                  key = category + "_" + key;
+               }
 
                if (param.second.IsScalar()) {
                   string value = param.second.as<string>();
@@ -555,12 +588,31 @@ void TPG::TeamMutator_AddPrograms(team* team_to_mu) {
    double rd = real_dist_(rngs_[TPG_SEED]);
    if ((int)team_to_mu->size() < GetParam<int>("max_team_size") &&
        rd < GetParam<double>("pma")) {
-      uniform_int_distribution<int> dis_programs(0, program_pop_.size() - 1);
       uniform_int_distribution<int> dis_team_size(0, team_to_mu->size() - 1);
-      int random_prog_index = dis_programs(rngs_[TPG_SEED]);
-      auto it = program_pop_.begin();
-      std::advance(it, random_prog_index);
-      RegisterMachine* p = it->second;
+      RegisterMachine* p = nullptr;
+      if (UsesXPredPreyCoevolution()) {
+         vector<RegisterMachine*> compatible;
+         for (const auto& [id, candidate] : program_pop_) {
+            (void)id;
+            if (candidate->action_ < 0 ||
+                (team_map_.find(candidate->action_) != team_map_.end() &&
+                 team_map_[candidate->action_]->populationRole() ==
+                     team_to_mu->populationRole())) {
+               compatible.push_back(candidate);
+            }
+         }
+         if (compatible.empty()) return;
+         uniform_int_distribution<int> choose(0, compatible.size() - 1);
+         p = CloneProgram(compatible[choose(rngs_[TPG_SEED])],
+                          team_to_mu->populationRole());
+         AddProgram(p);
+      } else {
+         uniform_int_distribution<int> dis_programs(0,
+                                                     program_pop_.size() - 1);
+         auto it = program_pop_.begin();
+         std::advance(it, dis_programs(rngs_[TPG_SEED]));
+         p = it->second;
+      }
       team_to_mu->AddProgram(p, dis_team_size(rngs_[TPG_SEED]));
    }
 }
@@ -575,6 +627,7 @@ void TPG::TeamMutator_RemovePrograms(team* team_to_mu) {
 /******************************************************************************/
 team* TPG::CloneTeam(team* team_to_clone) {
    team* team_clone = new team(GetState("t_current"), state_["team_count"]++, team_to_clone->obs_index_, team_to_clone->lambda_td_, team_to_clone->decay_factor_);
+   team_clone->populationRole(team_to_clone->populationRole());
    for (auto m : team_to_clone->members_) {
       team_clone->AddProgram(m);
    }
@@ -582,37 +635,63 @@ team* TPG::CloneTeam(team* team_to_clone) {
 }
 
 /******************************************************************************/
-RegisterMachine* TPG::CloneProgram(RegisterMachine* prog) {
+RegisterMachine* TPG::CloneProgram(RegisterMachine* prog,
+                                   int population_role) {
+   auto program_params = ParamsForPopulationRole(population_role);
    RegisterMachine* prog_clone = new RegisterMachine(
-       *(dynamic_cast<RegisterMachine*>(prog)), params_, state_, rngs_[TPG_SEED]);
+       *(dynamic_cast<RegisterMachine*>(prog)), program_params, state_,
+       rngs_[TPG_SEED]);
    if (prog_clone->action_ >= 0)
       team_map_[prog_clone->action_]->AddIncomingProgram(prog_clone->id_);
    return prog_clone;
 }
 
 /******************************************************************************/
-void TPG::ProgramMutator_Instructions(RegisterMachine* prog_to_mu) {
+void TPG::ProgramMutator_Instructions(RegisterMachine* prog_to_mu,
+                                      int population_role, long team_id,
+                                      long parent_program_id) {
+   auto program_params = ParamsForPopulationRole(population_role);
    const int mutation_passes =
        HaveParam("n_mutation_passes") ? GetParam<int>("n_mutation_passes") : 1;
    if (mutation_passes < 1) {
       die(__FILE__, __FUNCTION__, __LINE__,
           "n_mutation_passes must be at least one.");
    }
-   // Normally mutation consumes the parent's final self-modified S2-S6
+   // Normally mutation consumes the parent's final self-modified S2-S7
    // outputs. This ablation instead makes mutation consume the inherited
    // constants by resetting working memory before the first mutation pass.
-   if (HaveParam("reset_self_modifying_before_mutation") &&
-       GetParam<int>("reset_self_modifying_before_mutation") != 0) {
-      prog_to_mu->SeedSelfModifyingWorkingFromConstants(params_);
+   // Read the parent's actual phenotype for logging, before cloning can
+   // sanitize a non-finite output. The used rates below come from the child.
+   const auto parent = program_pop_.find(parent_program_id);
+   const auto encounter_output = ReadXPredPreyRates(
+       parent != program_pop_.end() ? *parent->second : *prog_to_mu);
+   const bool reset_before = HaveParam("reset_self_modifying_before_mutation") &&
+       GetParam<int>("reset_self_modifying_before_mutation") != 0;
+   if (reset_before) {
+      prog_to_mu->SeedSelfModifyingWorkingFromConstants(program_params);
    }
    for (int pass = 0; pass < mutation_passes; ++pass) {
-      prog_to_mu->Mutate(params_, state_, rngs_[TPG_SEED], _ops);
+      const auto inherited_before = ReadXPredPreyRates(*prog_to_mu, true);
+      const auto used = prog_to_mu->MutationProbabilities(program_params);
+      prog_to_mu->Mutate(program_params, state_, rngs_[TPG_SEED], _ops);
+      if (UsesXPredPreyCoevolution()) {
+         std::ostringstream row;
+         row << seeds_[TPG_SEED] << ',' << GetState("t_current") << ','
+             << team_id << ',' << XPredPreyRoleName(population_role) << ','
+             << parent_program_id << ',' << prog_to_mu->id_ << ','
+             << prog_to_mu->self_modifying_ << ',' << reset_before << ',' << pass;
+         WriteXPredPreyRates(row, encounter_output);
+         WriteXPredPreyRates(row, inherited_before);
+         for (double rate : used) row << ',' << rate;
+         WriteXPredPreyRates(row, ReadXPredPreyRates(*prog_to_mu, true));
+         WriteXPredPreyLog(true, row.str());
+      }
    }
    // All stacked passes use the selected starting rates (parent outputs by
    // default, inherited constants in the reset-before ablation). Once
    // variation is complete, prepare the child to start evaluation from its
    // inherited constants, which may have evolved if that ablation is enabled.
-   prog_to_mu->SeedSelfModifyingWorkingFromConstants(params_);
+   prog_to_mu->SeedSelfModifyingWorkingFromConstants(program_params);
 }
 
 /******************************************************************************/
@@ -648,19 +727,35 @@ void TPG::MutateActionToTeam(RegisterMachine* prog_to_mu, team* new_team,
    if (GetState("t_current") == 1) {
       return;
    } else {
-      if (prog_to_mu->action_ < 0) {
-        new_team->n_atomic_--;
-      }
-      uniform_int_distribution<int> disM(0, team_map_.size() - 1);
       team* tm;
-      int tries = 0;
-      do {
-         auto it = team_map_.begin();
-         advance(it, disM(rngs_[TPG_SEED]));
-         tm = it->second;
-      } while (tries++ < 20 &&
-               (tm->gtime_ == GetState("t_current") || tm->clones_ > 0 ||
-                prog_to_mu->action_ == tm->id_));
+      if (UsesXPredPreyCoevolution()) {
+         vector<team*> compatible;
+         for (const auto& [id, candidate] : team_map_) {
+            (void)id;
+            if (candidate->populationRole() == new_team->populationRole() &&
+                candidate->gtime_ != GetState("t_current") &&
+                candidate->clones_ == 0 &&
+                prog_to_mu->action_ != candidate->id_) {
+               compatible.push_back(candidate);
+            }
+         }
+         if (compatible.empty()) return;
+         uniform_int_distribution<int> choose(0, compatible.size() - 1);
+         tm = compatible[choose(rngs_[TPG_SEED])];
+      } else {
+         uniform_int_distribution<int> disM(0, team_map_.size() - 1);
+         int tries = 0;
+         do {
+            auto it = team_map_.begin();
+            advance(it, disM(rngs_[TPG_SEED]));
+            tm = it->second;
+         } while (tries++ < 20 &&
+                  (tm->gtime_ == GetState("t_current") || tm->clones_ > 0 ||
+                   prog_to_mu->action_ == tm->id_));
+      }
+      if (prog_to_mu->action_ < 0) {
+         new_team->n_atomic_--;
+      }
       if (prog_to_mu->action_ >= 0)
          team_map_[prog_to_mu->action_]->removeIncomingProgram(prog_to_mu->id_);
       if (!tm->root()) {  // Already subsumed, don't clone
@@ -729,6 +824,11 @@ team* TPG::TeamCrossover(team* parent1, team* parent2) {
       decay_to_use = parent2->decay_factor_;}
 
    team* child_team = new team(GetState("t_current"), state_["team_count"]++, ((parent1->obs_index_ + parent2->obs_index_)/2), lambda_to_use, decay_to_use);
+   if (parent1->populationRole() != parent2->populationRole()) {
+      die(__FILE__, __FUNCTION__, __LINE__,
+          "xpredprey crossover requires parents from the same population");
+   }
+   child_team->populationRole(parent1->populationRole());
    
    // TODO(skelly): linear crossover
    if (parent1->size() == 1 && parent2->size() == 1 &&
@@ -1056,6 +1156,10 @@ team* TPG::TeamSelector_Tournament(vector<team*>& candidate_parent_teams) {
 
 /******************************************************************************/
 void TPG::GenerateNewTeams() {
+   if (UsesXPredPreyCoevolution()) {
+      GenerateNewXPredPreyTeams();
+      return;
+   }
    int new_teams_count = 0;
    const bool shadow_run = GetParam<int>("shadow_run") != 0;
    auto task_power_set = PowerSet(GetState("n_task"));
@@ -1126,6 +1230,71 @@ void TPG::GenerateNewTeams() {
    EventDispatcher<ReplacementMetrics>::instance().notify(EventType::REPLACEMENT, metrics);
 }
 
+void TPG::GenerateNewXPredPreyTeams() {
+   int new_teams_count = 0;
+   const bool shadow_run = GetParam<int>("shadow_run") != 0;
+   const int requested = GetParam<int>("n_root_gen");
+
+   for (int role : {POPULATION_ROLE_PREDATOR, POPULATION_ROLE_PREY}) {
+      vector<team*> candidates;
+      for (auto* candidate : GetRootTeamsInVec()) {
+         if (candidate->populationRole() == role) candidates.push_back(candidate);
+      }
+      if (candidates.empty()) {
+         die(__FILE__, __FUNCTION__, __LINE__,
+             "xpredprey requires non-empty predator and prey populations");
+      }
+      if (!shadow_run) ComputeParetoFronts(candidates);
+
+      const int offspring_count = requested / 2 +
+          ((requested % 2 != 0 && role == POPULATION_ROLE_PREDATOR) ? 1 : 0);
+      uniform_int_distribution<int> random_parent(0,
+                                                   candidates.size() - 1);
+      for (int i = 0; i < offspring_count; ++i) {
+         team* parent1 = nullptr;
+         team* parent2 = nullptr;
+         if (!shadow_run && GetParam<int>("tournament_size") > 0) {
+            parent1 = TeamSelector_Tournament(candidates);
+            parent2 = TeamSelector_Tournament(candidates);
+         } else {
+            parent1 = candidates[random_parent(rngs_[TPG_SEED])];
+            parent2 = candidates[random_parent(rngs_[TPG_SEED])];
+         }
+
+         team* child = nullptr;
+         if (real_dist_(rngs_[TPG_SEED]) < GetParam<double>("pmx")) {
+            child = TeamCrossover(parent1, parent2);
+            AddAncestorToPhylogeny(parent1, child);
+            AddAncestorToPhylogeny(parent2, child);
+         } else {
+            child = CloneTeam(parent1);
+            AddAncestorToPhylogeny(parent1, child);
+         }
+         child->populationRole(role);
+         AddTeamToPhylogeny(child);
+         ApplyVariationOps(child, new_teams_count);
+         AddTeam(child);
+         ++new_teams_count;
+      }
+   }
+
+   oss << "genTmsXPredPrey t " << GetState("t_current")
+       << " predatorNew " << (requested / 2 + requested % 2)
+       << " preyNew " << (requested / 2)
+       << " Msz " << team_pop_.size() << " Lsz " << program_pop_.size()
+       << " eLSz " << _numEliteTeamsCurrent[GetState("phase")] << endl;
+
+   ReplacementMetricsBuilder builder;
+   builder.with_generation(GetState("t_current"))
+      .with_num_teams(team_pop_.size())
+      .with_num_programs(program_pop_.size())
+      .with_memory_size(_Memory.size())
+      .with_num_elite_teams(_numEliteTeamsCurrent[GetState("phase")])
+      .with_num_new_teams(new_teams_count);
+   EventDispatcher<ReplacementMetrics>::instance().notify(
+       EventType::REPLACEMENT, builder.build());
+}
+
 /******************************************************************************/
 void TPG::ApplyVariationOps(team* team_to_modify, int& n_new_teams) {
    uniform_int_distribution<int> disL(0, program_pop_.size() - 1);
@@ -1145,9 +1314,12 @@ void TPG::ApplyVariationOps(team* team_to_modify, int& n_new_teams) {
              real_dist_(rngs_[TPG_SEED]) < 1.0 / new_team_programs.size()) {
             // TODO(skelly): add/remove changes order and thus behaviour?
             team_to_modify->RemoveProgram(prog);
-            RegisterMachine* prog_clone = CloneProgram(prog);
+            RegisterMachine* prog_clone =
+                CloneProgram(prog, team_to_modify->populationRole());
             // ProgramMutator_Memory(prog_clone);
-            ProgramMutator_Instructions(prog_clone);
+            ProgramMutator_Instructions(prog_clone,
+                                        team_to_modify->populationRole(),
+                                        team_to_modify->id_, prog->id_);
             ProgramMutator_ActionPointer(prog_clone, team_to_modify,
                                          n_new_teams);
             team_to_modify->AddProgram(prog_clone);
@@ -1158,7 +1330,9 @@ void TPG::ApplyVariationOps(team* team_to_modify, int& n_new_teams) {
       for (auto prog : team_to_modify->members_) {
          if (real_dist_(rngs_[TPG_SEED]) < 1.0 / team_to_modify->size()) {
             // ProgramMutator_Memory(prog);
-            ProgramMutator_Instructions(prog);
+            ProgramMutator_Instructions(prog,
+                                        team_to_modify->populationRole(),
+                                        team_to_modify->id_, prog->id_);
          }
       }
    }
@@ -1172,6 +1346,75 @@ void TPG::ExtinctionEvent() {
     
     if (totalTeams <= 1)
         return;
+
+    // XPredPrey must retain both sides of the coevolutionary contest.  In a
+    // normal run preserve each role champion; in a shadow run preserve one
+    // random representative per role without introducing fitness selection.
+    if (UsesXPredPreyCoevolution()) {
+        unordered_set<team*> teamsToKeep;
+        vector<team*> candidates;
+        for (int role : {POPULATION_ROLE_PREDATOR, POPULATION_ROLE_PREY}) {
+            vector<team*> roleTeams;
+            for (auto* tm : GetRootTeamsInVec()) {
+                if (tm->populationRole() == role) roleTeams.push_back(tm);
+            }
+            if (roleTeams.empty()) continue;
+
+            if (shadow_run) {
+                std::shuffle(roleTeams.begin(), roleTeams.end(), rngs_[TPG_SEED]);
+            } else {
+                std::sort(roleTeams.begin(), roleTeams.end(),
+                          teamFitnessLexicalCompare());
+            }
+            teamsToKeep.insert(roleTeams.front());
+            candidates.insert(candidates.end(), roleTeams.begin() + 1,
+                              roleTeams.end());
+        }
+
+        const size_t keepCandidates = std::min(
+            candidates.size(), static_cast<size_t>(std::max(
+                                   0, static_cast<int>(std::ceil(
+                                          candidates.size() *
+                                          (keepPercentage / 100.0))))));
+        std::shuffle(candidates.begin(), candidates.end(), rngs_[TPG_SEED]);
+        for (size_t i = 0; i < keepCandidates; ++i) {
+            teamsToKeep.insert(candidates[i]);
+        }
+
+        int n_deleted = 0;
+        int n_old_deleted = 0;
+        for (auto* tm : GetRootTeamsInVec()) {
+            if (teamsToKeep.find(tm) == teamsToKeep.end()) {
+                phylo_graph_[tm->id_].dtime = GetState("t_current");
+                ++n_deleted;
+                n_old_deleted += tm->gtime_ < GetState("t_current") ? 1 : 0;
+                RemoveTeam(tm);
+            }
+        }
+        CleanupProgramsWithNoRefs();
+
+        oss << "ExtinctionEvent: kept " << teamsToKeep.size()
+            << " role-balanced teams out of " << totalTeams << ", removed "
+            << n_deleted << " teams (old deleted: " << n_old_deleted << ")"
+            << endl;
+
+        RemovalMetrics metrics =
+            RemovalMetricsBuilder()
+                .with_generation(GetState("t_current"))
+                .with_num_teams(team_pop_.size())
+                .with_num_programs(program_pop_.size())
+                .with_num_root_programs(GetRootTeamsInVec().size())
+                .with_num_elite_teams(_numEliteTeamsCurrent[GetState("phase")])
+                .with_num_deleted(n_deleted)
+                .with_num_old_deleted(n_old_deleted)
+                .with_percent_old_deleted(
+                    n_deleted > 0 ? static_cast<double>(n_old_deleted) / n_deleted
+                                  : 0)
+                .build();
+        EventDispatcher<RemovalMetrics>::instance().notify(EventType::REMOVAL,
+                                                            metrics);
+        return;
+    }
 
     // Normal extinction preserves the best team.  Shadow runs sample every
     // survivor uniformly, including the best team, to avoid fitness selection.
@@ -1421,7 +1664,58 @@ void TPG::FindMultiTaskElites(vector<TaskEnv*>& tasks,
 }
 
 /******************************************************************************/
+void TPG::SetXPredPreyEliteTeams(vector<TaskEnv*>& tasks) {
+   if (tasks.size() != 1 || tasks.front()->eval_type_ != "XPredPrey") {
+      die(__FILE__, __FUNCTION__, __LINE__,
+          "xpredprey coevolution requires exactly one XPredPrey task");
+   }
+
+   const int phase = GetState("phase");
+   _numEliteTeamsCurrent[phase] = 0;
+   for (auto* tm : GetRootTeamsInVec()) tm->elite(phase, false);
+
+   const int requested = GetParam<int>("n_root");
+   for (int role : {POPULATION_ROLE_PREDATOR, POPULATION_ROLE_PREY}) {
+      vector<team*> ranked;
+      for (auto* tm : GetRootTeamsInVec()) {
+         if (tm->populationRole() != role) continue;
+         if (tm->numOutcomes(phase, 0) < tasks.front()->GetNumEval(phase)) {
+            tm->elite(phase, true);
+            ++_numEliteTeamsCurrent[phase];
+            continue;
+         }
+         tm->fit_ = tm->GetMeanOutcome(phase, 0, GetState("fitMode"));
+         ranked.push_back(tm);
+      }
+      sort(ranked.begin(), ranked.end(), teamFitnessLexicalCompare());
+
+      const size_t quota = static_cast<size_t>(requested / 2 +
+          ((requested % 2 != 0 && role == POPULATION_ROLE_PREDATOR) ? 1 : 0));
+      const size_t keep = std::min(quota, ranked.size());
+      const string role_name =
+          role == POPULATION_ROLE_PREDATOR ? "predator" : "prey";
+      task_set_map_[role_name].clear();
+      for (size_t i = 0; i < keep; ++i) {
+         if (!ranked[i]->elite(phase)) {
+            ranked[i]->elite(phase, true);
+            ++_numEliteTeamsCurrent[phase];
+         }
+         task_set_map_[role_name].push_back(ranked[i]);
+      }
+      if (!ranked.empty()) {
+         _eliteTeamPS[role_name][GetState("fitMode")][phase] = ranked.front();
+         oss << "setElTmsXPredPrey role " << role_name << " keep " << keep
+             << " champion " << ranked.front()->id_ << " fitness "
+             << ranked.front()->fit_ << endl;
+      }
+   }
+}
+
 void TPG::SetEliteTeams(vector<TaskEnv*>& tasks) {
+   if (UsesXPredPreyCoevolution()) {
+      SetXPredPreyEliteTeams(tasks);
+      return;
+   }
    vector<team*> teams_normed_scores;
    _numEliteTeamsCurrent[GetState("phase")] = 0;
    const bool shadow_run =
@@ -1546,12 +1840,19 @@ void TPG::InitTeams() {
       else 
          team_obs_size = 0;
       auto new_team = new team(GetState("t_current"), state_["team_count"]++, team_obs_size, lambda_gen_val, decay_gen_val);
+      if (UsesXPredPreyCoevolution()) {
+         new_team->populationRole(t % 2 == 0 ? POPULATION_ROLE_PREDATOR
+                                             : POPULATION_ROLE_PREY);
+      }
+      auto population_params =
+          ParamsForPopulationRole(new_team->populationRole());
       for (int p = 0; p < initial_team_size; p++) {
          // Discrete atomic actions are negatives -1 to -numAtomicActions()
          
          long discrete_action = -1 - dis_actions(rngs_[TPG_SEED]);
-         auto new_prog = new RegisterMachine(discrete_action, team_obs_size, params_, state_,
-                                             rngs_[TPG_SEED], _ops);
+         auto new_prog = new RegisterMachine(
+             discrete_action, team_obs_size, population_params, state_,
+             rngs_[TPG_SEED], _ops);
          new_team->AddProgram(new_prog);
          AddProgram(new_prog);  // add program to program population
       }
@@ -1571,6 +1872,17 @@ void TPG::InitTeams() {
 /******************************************************************************/
 // Certain parameters must be processed here
 void TPG::ProcessParams() {
+   for (const char* key : {"predator_population_self_modifying",
+                           "prey_population_self_modifying"}) {
+      const auto setting = params_.find(key);
+      if (setting != params_.end()) {
+         const int value = std::any_cast<int>(setting->second);
+         if (value != 0 && value != 1) {
+            const string message = string(key) + " must be 0 or 1.";
+            die(__FILE__, __FUNCTION__, __LINE__, message.c_str());
+         }
+      }
+   }
    Seed(TPG_SEED, GetParam<int>("seed_tpg"));
    Seed(AUX_SEED, GetParam<int>("seed_aux"));
    // Replaying will require starting from checkpoint
@@ -1600,13 +1912,13 @@ void TPG::SetParams(int argc, char** argv) {
    // allow it to be overridden on the command line.
    params_["shadow_run"] = 0;
    // Baldwinian inheritance remains the default. Configurations can opt into
-   // writing parent-produced S2-S5 outputs into offspring constants.
+   // writing parent-produced S2-S6 outputs into offspring constants.
    params_["lamarkism_evolved_constants"] = 0;
-   // By default S2-S6 constants retain their historical ability to evolve.
+   // By default S2-S7 constants retain their historical ability to evolve.
    // Set this to 0 for the fixed-constant self-modification ablation.
    params_["evolve_self_modifying_constants"] = 1;
    // Preserve parent-produced rates through offspring mutation by default.
-   // Set to 1 to reset working S2-S6 from constants before mutation instead.
+   // Set to 1 to reset working S2-S7 from constants before mutation instead.
    params_["reset_self_modifying_before_mutation"] = 0;
    if (argc > 1) {
       for (int i = 1; i < argc; ++i) {
@@ -2809,7 +3121,13 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
             // written to the selection row below.
             team* best_agent = *teiter;
             const bool self_modifying =
-                std::any_cast<int>(params_["self_modifying"]) != 0;
+                best_agent != nullptr &&
+                std::any_of(best_agent->members_.begin(),
+                            best_agent->members_.end(),
+                            [](const RegisterMachine* program) {
+                               return program != nullptr &&
+                                      program->self_modifying_;
+                            });
             double best_agent_register_size = best_agent ? best_agent->AvgScalarRegsPerProgram() : 0.0;
             double best_agent_effective_register_size = 0.0;
             double best_agent_mean_register_similarity = 0.0;
@@ -2836,16 +3154,18 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
 
             // Average self-modifying mutation probabilities across the current
             // training elites. Start rates come from inherited constants;
-            // output rates come from working S2-S6; S6 is the neutral decoy.
+            // output rates come from working S2-S7; S7 is the neutral decoy.
             double elite_avg_start_rate_swap = 0.0;
             double elite_avg_start_rate_delete = 0.0;
             double elite_avg_start_rate_add = 0.0;
             double elite_avg_start_rate_mutate = 0.0;
+            double elite_avg_start_rate_redundancy = 0.0;
             double elite_avg_start_rate_decoy = 0.0;
             double elite_avg_output_rate_swap = 0.0;
             double elite_avg_output_rate_delete = 0.0;
             double elite_avg_output_rate_add = 0.0;
             double elite_avg_output_rate_mutate = 0.0;
+            double elite_avg_output_rate_redundancy = 0.0;
             double elite_avg_output_rate_decoy = 0.0;
             int elite_rate_team_count = 0;
             int elite_decoy_team_count = 0;
@@ -2860,11 +3180,13 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
                   double team_output_delete_sum = 0.0;
                   double team_output_add_sum = 0.0;
                   double team_output_mutate_sum = 0.0;
+                  double team_output_redundancy_sum = 0.0;
                   double team_output_decoy_sum = 0.0;
                   double team_start_swap_sum = 0.0;
                   double team_start_delete_sum = 0.0;
                   double team_start_add_sum = 0.0;
                   double team_start_mutate_sum = 0.0;
+                  double team_start_redundancy_sum = 0.0;
                   double team_start_decoy_sum = 0.0;
                   int team_decoy_program_count = 0;
                   for (const auto* prog : elite_team->members_) {
@@ -2889,6 +3211,8 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
                          scalar_memory->working_memory_[kSelfModifyingFirstRegister + 2](0, 0);
                      const double output_mutate =
                          scalar_memory->working_memory_[kSelfModifyingFirstRegister + 3](0, 0);
+                     const double output_redundancy =
+                         scalar_memory->working_memory_[kSelfModifyingFirstRegister + 4](0, 0);
                      const double start_swap =
                          scalar_memory->const_memory_[kSelfModifyingFirstRegister](0, 0);
                      const double start_delete =
@@ -2897,14 +3221,20 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
                          scalar_memory->const_memory_[kSelfModifyingFirstRegister + 2](0, 0);
                      const double start_mutate =
                          scalar_memory->const_memory_[kSelfModifyingFirstRegister + 3](0, 0);
+                     const double start_redundancy =
+                         scalar_memory->const_memory_[kSelfModifyingFirstRegister + 4](0, 0);
                      team_output_swap_sum += SelfModifyingRawTendencyToProbability(output_swap);
                      team_output_delete_sum += SelfModifyingRawTendencyToProbability(output_delete);
                      team_output_add_sum += SelfModifyingRawTendencyToProbability(output_add);
                      team_output_mutate_sum += SelfModifyingRawTendencyToProbability(output_mutate);
+                     team_output_redundancy_sum +=
+                         SelfModifyingRawTendencyToProbability(output_redundancy);
                      team_start_swap_sum += SelfModifyingRawTendencyToProbability(start_swap);
                      team_start_delete_sum += SelfModifyingRawTendencyToProbability(start_delete);
                      team_start_add_sum += SelfModifyingRawTendencyToProbability(start_add);
                      team_start_mutate_sum += SelfModifyingRawTendencyToProbability(start_mutate);
+                     team_start_redundancy_sum +=
+                         SelfModifyingRawTendencyToProbability(start_redundancy);
                      if (scalar_memory->working_memory_.size() >
                              kSelfModifyingDecoyRegister &&
                          scalar_memory->const_memory_.size() >
@@ -2926,6 +3256,8 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
                          team_output_add_sum / team_program_count;
                      elite_avg_output_rate_mutate +=
                          team_output_mutate_sum / team_program_count;
+                     elite_avg_output_rate_redundancy +=
+                         team_output_redundancy_sum / team_program_count;
                      elite_avg_start_rate_swap +=
                          team_start_swap_sum / team_program_count;
                      elite_avg_start_rate_delete +=
@@ -2934,6 +3266,8 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
                          team_start_add_sum / team_program_count;
                      elite_avg_start_rate_mutate +=
                          team_start_mutate_sum / team_program_count;
+                     elite_avg_start_rate_redundancy +=
+                         team_start_redundancy_sum / team_program_count;
                      elite_rate_team_count++;
                      if (team_decoy_program_count > 0) {
                         elite_avg_output_rate_decoy +=
@@ -2950,10 +3284,12 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
                elite_avg_start_rate_delete /= elite_rate_team_count;
                elite_avg_start_rate_add /= elite_rate_team_count;
                elite_avg_start_rate_mutate /= elite_rate_team_count;
+               elite_avg_start_rate_redundancy /= elite_rate_team_count;
                elite_avg_output_rate_swap /= elite_rate_team_count;
                elite_avg_output_rate_delete /= elite_rate_team_count;
                elite_avg_output_rate_add /= elite_rate_team_count;
                elite_avg_output_rate_mutate /= elite_rate_team_count;
+               elite_avg_output_rate_redundancy /= elite_rate_team_count;
             }
             if (elite_decoy_team_count > 0) {
                elite_avg_start_rate_decoy /= elite_decoy_team_count;
@@ -3026,11 +3362,13 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
                                                elite_avg_start_rate_delete,
                                                elite_avg_start_rate_add,
                                                elite_avg_start_rate_mutate,
+                                               elite_avg_start_rate_redundancy,
                                                elite_avg_start_rate_decoy)
                    .with_elite_avg_output_rates(elite_avg_output_rate_swap,
                                                 elite_avg_output_rate_delete,
                                                 elite_avg_output_rate_add,
                                                 elite_avg_output_rate_mutate,
+                                                elite_avg_output_rate_redundancy,
                                                 elite_avg_output_rate_decoy)
                    .with_operations_use(op_countsTally)
                    // NSGA-II Pareto front metrics
@@ -3220,6 +3558,10 @@ void TPG::trackTeamInfo(long t, int phase, bool singleBest, long teamId) {
 /******************************************************************************/
 void TPG::RegisterMachineCrossover(RegisterMachine* p1, RegisterMachine* p2,
                                    RegisterMachine** c1, RegisterMachine** c2) {
+   auto p1_params = params_;
+   auto p2_params = params_;
+   p1_params["self_modifying"] = p1->self_modifying_ ? 1 : 0;
+   p2_params["self_modifying"] = p2->self_modifying_ ? 1 : 0;
    int split1, split2;
 
    // Split parent 1 (p1) into 3 random chunks
@@ -3266,7 +3608,7 @@ void TPG::RegisterMachineCrossover(RegisterMachine* p1, RegisterMachine* p2,
                           p2_chunks[1].end());
    c1_instructions.insert(c1_instructions.end(), p1_chunks[2].begin(),
                           p1_chunks[2].end());
-   *c1 = new RegisterMachine(p1->action_, c1_instructions, params_, state_,
+   *c1 = new RegisterMachine(p1->action_, c1_instructions, p1_params, state_,
                              rngs_[TPG_SEED], _ops, p1->n_memories_);
 
    // Cretae child 2 (c2) from parent chunks {p2-0, p1-1, p2-2}
@@ -3277,7 +3619,7 @@ void TPG::RegisterMachineCrossover(RegisterMachine* p1, RegisterMachine* p2,
                           p1_chunks[1].end());
    c2_instructions.insert(c2_instructions.end(), p2_chunks[2].begin(),
                           p2_chunks[2].end());
-   *c2 = new RegisterMachine(p2->action_, c2_instructions, params_, state_,
+   *c2 = new RegisterMachine(p2->action_, c2_instructions, p2_params, state_,
                              rngs_[TPG_SEED], _ops, p2->n_memories_);
 }
 
@@ -3285,6 +3627,10 @@ void TPG::LinearCrossover(RegisterMachine* gp1,
                           RegisterMachine* gp2,
                           RegisterMachine** c1,
                           RegisterMachine** c2) {
+    auto gp1_params = params_;
+    auto gp2_params = params_;
+    gp1_params["self_modifying"] = gp1->self_modifying_ ? 1 : 0;
+    gp2_params["self_modifying"] = gp2->self_modifying_ ? 1 : 0;
     // =========================================================
     // Linear Register Crossover (Sorted Index Method)
     // =========================================================
@@ -3335,8 +3681,8 @@ void TPG::LinearCrossover(RegisterMachine* gp1,
 
     // Fallback: Clone if too small to cut
     if (mods1.size() < 2 || mods2.size() < 2) {
-        *c1 = new RegisterMachine(gp1->action_, gp1->instructions_, params_, state_, rngs_[TPG_SEED], _ops, gp1->n_memories_);
-        *c2 = new RegisterMachine(gp2->action_, gp2->instructions_, params_, state_, rngs_[TPG_SEED], _ops, gp2->n_memories_);
+        *c1 = new RegisterMachine(gp1->action_, gp1->instructions_, gp1_params, state_, rngs_[TPG_SEED], _ops, gp1->n_memories_);
+        *c2 = new RegisterMachine(gp2->action_, gp2->instructions_, gp2_params, state_, rngs_[TPG_SEED], _ops, gp2->n_memories_);
         return;
     }
 
@@ -3426,8 +3772,8 @@ void TPG::LinearCrossover(RegisterMachine* gp1,
     build_prog(gp1, gp2, owner_c1, c1_instrs);
     build_prog(gp1, gp2, owner_c2, c2_instrs);
 
-    *c1 = new RegisterMachine(gp1->action_, c1_instrs, params_, state_, rngs_[TPG_SEED], _ops, gp1->n_memories_);
-    *c2 = new RegisterMachine(gp2->action_, c2_instrs, params_, state_, rngs_[TPG_SEED], _ops, gp2->n_memories_);
+    *c1 = new RegisterMachine(gp1->action_, c1_instrs, gp1_params, state_, rngs_[TPG_SEED], _ops, gp1->n_memories_);
+    *c2 = new RegisterMachine(gp2->action_, c2_instrs, gp2_params, state_, rngs_[TPG_SEED], _ops, gp2->n_memories_);
 }
 
 // void TPG::LinearCrossover(RegisterMachine* gp1,
@@ -3619,6 +3965,7 @@ void TPG::ReadCheckpoint(long t, int phase, bool fromString,
    long memberId = 0;
    long max_teamCount = -1;
    long max_programCount = -1;
+   bool checkpoint_has_population_variant = false;
    int f;
 
    while (getline(iss, oneline)) {
@@ -3653,6 +4000,12 @@ void TPG::ReadCheckpoint(long t, int phase, bool fromString,
          long prog_id = atol(outcome_fields[1].c_str());
          AddMemory(prog_id, new MemoryEigen(outcome_fields));
       } else if (outcome_fields[0].compare("RegisterMachine") == 0) {
+         checkpoint_has_population_variant =
+             checkpoint_has_population_variant ||
+             std::any_of(outcome_fields.begin(), outcome_fields.end(),
+                         [](const string& field) {
+                            return field.rfind("SM", 0) == 0;
+                         });
          max_programCount =
              std::max(max_programCount, atol(outcome_fields[1].c_str()));
          AddProgram(new RegisterMachine(outcome_fields, _Memory, params_,
@@ -3677,6 +4030,14 @@ void TPG::ReadCheckpoint(long t, int phase, bool fromString,
             program_pop_[memberId]->nrefs_--;
          }
          AddTeam(m);
+      } else if (outcome_fields[0] == "self_modifying_state") {
+         RestoreSelfModifyingRates(outcome_fields);
+      } else if (outcome_fields[0].compare("population_role") == 0) {
+         const long id = atol(outcome_fields[1].c_str());
+         const int role = atoi(outcome_fields[2].c_str());
+         if (team_map_.find(id) != team_map_.end()) {
+            team_map_[id]->populationRole(role);
+         }
       } else if (outcome_fields[0].compare("incoming_progs") == 0) {
          f = 1;
          long id = atoi(outcome_fields[f++].c_str());
@@ -3713,6 +4074,29 @@ void TPG::ReadCheckpoint(long t, int phase, bool fromString,
    }
    state_["program_count"] = max_programCount + 1;
    state_["team_count"] = max_teamCount + 1;
+   if (UsesXPredPreyCoevolution()) {
+      for (auto* tm : GetRootTeamsInVec()) {
+         if (tm->populationRole() == POPULATION_ROLE_DEFAULT) {
+            tm->populationRole(tm->id_ % 2 == 0 ? POPULATION_ROLE_PREDATOR
+                                                 : POPULATION_ROLE_PREY);
+         }
+      }
+      // Checkpoints written before per-population variants did not store an
+      // SM token on each program. Apply the current role configuration once
+      // roles have been restored; new checkpoints retain their saved variant.
+      if (!checkpoint_has_population_variant) {
+         for (auto* tm : GetRootTeamsInVec()) {
+            auto role_params = ParamsForPopulationRole(tm->populationRole());
+            set<team*, teamIdComp> visited_teams;
+            set<RegisterMachine*, RegisterMachineIdComp> programs;
+            tm->GetAllNodes(team_map_, visited_teams, programs);
+            for (auto* program : programs) {
+               program->ConfigureSelfModifyingRegisters(role_params, false);
+               program->SeedSelfModifyingWorkingFromConstants(role_params);
+            }
+         }
+      }
+   }
    // state_["memory_count"] = max_memoryCount + 1;
 }
 
@@ -4135,8 +4519,6 @@ void TPG::EncodeEvalResultString(EvalData& eval_data) {
 
 void TPG::AppendSelfModifyingRates(std::string& result,
                                    std::vector<team*>& teams) {
-   if (std::any_cast<int>(params_["self_modifying"]) == 0) return;
-
    set<team*, teamIdComp> visited_teams;
    set<RegisterMachine*, RegisterMachineIdComp> programs;
    for (auto* tm : teams) {
@@ -4144,28 +4526,28 @@ void TPG::AppendSelfModifyingRates(std::string& result,
    }
 
    for (auto* prog : programs) {
-      if (!prog) continue;
+      if (!prog || !prog->self_modifying_) continue;
       auto* scalar_memory = prog->private_memory_[MemoryEigen::kScalarType_];
       if (!scalar_memory ||
           scalar_memory->working_memory_.size() < kSelfModifyingMinScalarRegisters) {
          continue;
       }
 
-      result += "R:" + to_string(static_cast<long>(prog->id_));
+      std::ostringstream rates;
+      rates << "R:" << prog->id_
+            << std::setprecision(std::numeric_limits<double>::max_digits10);
       const size_t last_reg = kSelfModifyingDecoyRegister;
       for (size_t reg = kSelfModifyingFirstRegister; reg <= last_reg; ++reg) {
-         double v = scalar_memory->working_memory_[reg](0, 0);
-         v = std::isfinite(v) ? v : 0.0;
-         result += ":" + to_string(v);
+         double v = SanitizeSelfModifyingRawTendency(
+             scalar_memory->working_memory_[reg](0, 0));
+         rates << ':' << v;
       }
-      result += "\n";
+      result += rates.str() + "\n";
    }
 }
 
 void TPG::LogReplaySelfModifyingRates(const EvalData& eval_data) {
-   if (GetParam<int>("replay") == 0 ||
-       std::any_cast<int>(params_["self_modifying"]) == 0 ||
-       eval_data.tm == nullptr) {
+   if (GetParam<int>("replay") == 0 || eval_data.tm == nullptr) {
       return;
    }
 
@@ -4173,11 +4555,11 @@ void TPG::LogReplaySelfModifyingRates(const EvalData& eval_data) {
    set<RegisterMachine*, RegisterMachineIdComp> programs;
    eval_data.tm->GetAllNodes(team_map_, visited_teams, programs);
 
-   double start[4] = {0.0, 0.0, 0.0, 0.0};
-   double output[4] = {0.0, 0.0, 0.0, 0.0};
+   std::array<double, kSelfModifyingRegisterCount> start{};
+   std::array<double, kSelfModifyingRegisterCount> output{};
    size_t count = 0;
    for (auto* prog : programs) {
-      if (!prog) continue;
+      if (!prog || !prog->self_modifying_) continue;
       auto* memory = prog->private_memory_[MemoryEigen::kScalarType_];
       if (!memory ||
           memory->const_memory_.size() < kSelfModifyingMinScalarRegisters ||
@@ -4205,40 +4587,79 @@ void TPG::LogReplaySelfModifyingRates(const EvalData& eval_data) {
    if (first_row) {
       out << "episode,timestep,program_count,start_swap,output_swap,"
              "start_delete,output_delete,start_add,output_add,"
-             "start_mutate,output_mutate\n";
+             "start_mutate,output_mutate,"
+             "start_redundancy,output_redundancy\n";
    }
    out << eval_data.episode << ',' << eval_data.timestep << ',' << count;
-   for (size_t rate = 0; rate < 4; ++rate) {
+   for (size_t rate = 0; rate < kSelfModifyingRegisterCount; ++rate) {
       out << ',' << start[rate] / count << ',' << output[rate] / count;
    }
    out << '\n';
 }
 
 /******************************************************************************/
+void TPG::WriteXPredPreyLog(bool reproduction, const std::string& row) {
+   auto& log = reproduction ? xpredprey_reproduction_log_ : xpredprey_encounter_log_;
+   if (!log.is_open()) {
+      const std::string name = reproduction ? "reproduction" : "encounters";
+      std::filesystem::create_directories("logs/xpredprey");
+      const std::string path = "logs/xpredprey/" + name + "." +
+          std::to_string(seeds_[TPG_SEED]) + "." +
+          std::to_string(GetParam<int>("pid")) + ".csv";
+      const bool header = !std::filesystem::exists(path) ||
+          std::filesystem::file_size(path) == 0;
+      log.open(path, std::ios::app);
+      if (!log) throw std::runtime_error("Cannot open " + path);
+      if (header) log << (reproduction ? XPredPreyReproductionHeader()
+                                      : XPredPreyEncounterHeader()) << '\n';
+   }
+   log << row << '\n';
+   if (!log) throw std::runtime_error("Failed writing XPredPrey metrics");
+}
+
+void TPG::RestoreSelfModifyingRates(const std::vector<std::string>& fields) {
+   const size_t count = kSelfModifyingDecoyRegister - kSelfModifyingFirstRegister + 1;
+   if (fields.size() != count + 2)
+      throw std::runtime_error("Malformed self-modifying state record");
+   const auto found = program_pop_.find(std::stol(fields[1]));
+   if (found == program_pop_.end() || !found->second || !found->second->self_modifying_)
+      throw std::runtime_error("Self-modifying state refers to an invalid program");
+   auto* memory = found->second->private_memory_[MemoryEigen::kScalarType_];
+   if (memory->working_memory_.size() < kSelfModifyingMinScalarRegisters)
+      throw std::runtime_error("Missing S2-S7 in self-modifying state recipient");
+   for (size_t i = 0; i < count; ++i) {
+      // The wire record begins at S2, NOT S1. Preserve S0/S1 and include S7.
+      try {
+         memory->working_memory_[kSelfModifyingFirstRegister + i](0, 0) =
+             SanitizeSelfModifyingRawTendency(std::stod(fields[i + 2]));
+      } catch (const std::exception&) {
+         // Older checkpoints or a worker with an overflowed rate must not
+         // abort an MPI run. Use the stable lower-bound tendency instead.
+         memory->working_memory_[kSelfModifyingFirstRegister + i](0, 0) =
+             -kSelfModifyingBoundaryRaw;
+      }
+   }
+}
+
 void TPG::DecodeEvalResultString(std::string& s) {
    string line;
    vector<string> split_str;
    istringstream f(s);
    while (getline(f, line)) {
+      if (line.empty()) continue;
+      if (line.rfind("X:", 0) == 0) {
+         WriteXPredPreyLog(false, line.substr(2));
+         continue;
+      }
       vector<long> active;
       vector<double> r_stats_double;
       vector<int> r_stats_int;
       SplitString(line, ':', split_str);
       if (!split_str.empty() && split_str[0] == "R" && split_str.size() > 2) {
-         long prog_id = atol(split_str[1].c_str());
-         auto prog_it = program_pop_.find(prog_id);
-         if (prog_it != program_pop_.end() && prog_it->second) {
-            auto* scalar_memory =
-                prog_it->second->private_memory_[MemoryEigen::kScalarType_];
-            if (scalar_memory) {
-               for (size_t k = 2; k < split_str.size(); ++k) {
-                  const size_t reg = k - 1;  // split_str[2] -> working S1
-                  if (reg < scalar_memory->working_memory_.size()) {
-                     scalar_memory->working_memory_[reg](0, 0) =
-                         atof(split_str[k].c_str());
-                  }
-               }
-            }
+         // Held-out XPredPrey encounters operate on the worker copy only.
+         // Defend at the receiver too, even if a worker sends rate records.
+         if (!UsesXPredPreyCoevolution() || GetState("phase") == _TRAIN_PHASE) {
+            RestoreSelfModifyingRates(split_str);
          }
          continue;
       }
