@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Replay each seed's final best agent and plot its S1-S4 rates by timestep."""
+"""Replay each seed's final best agent and plot its S2-S6 rates by timestep."""
 
 import csv
 from pathlib import Path
@@ -17,26 +17,31 @@ import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
 RECORD_EVERY_TIMESTEPS = 10  # Use 1, 5, 10, etc.
-EXPERIMENT_DIR = REPO / "experiments/gradient_test_baldwin"
-PARAMETERS_FILE = REPO / "configs/gradient_test_baldwin.yaml"
-OUTPUT_PDF = REPO / "output/pdf/best_agent_mutation_rates.pdf"
-EPISODES = 10
+TEST_SETUP = "mountaincar_continuous_execution_modified_rates"
+EXPERIMENT_DIR = REPO / "experiments" / TEST_SETUP
+PARAMETERS_FILE = REPO / "configs" / f"{TEST_SETUP}.yaml"
+OUTPUT_PDF = REPO / "output/pdf" / f"{TEST_SETUP}_mutation_rates.pdf"
+# MountainCarContinuous currently defines its replay evaluation count in the
+# task itself rather than in YAML.
+EPISODES = 100
 TIMESTEPS_PER_EPISODE = 200
 MPI_PROCESSES = 12
 REPLAY_EXECUTABLE = REPO / "build/release/experiments/TPGExperimentMPI"
 
-RATE_NAMES = ("swap", "delete", "add", "mutate")
+RATE_NAMES = ("swap", "delete", "add", "mutate", "redundancy")
 RATE_LABELS = {
     "swap": "Swap",
     "delete": "Delete",
     "add": "Add",
     "mutate": "Point mutation",
+    "redundancy": "Redundancy",
 }
 RATE_COLOURS = {
     "swap": "#0072B2",
     "delete": "#D55E00",
     "add": "#009E73",
     "mutate": "#CC79A7",
+    "redundancy": "#E69F00",
 }
 EPSILON = 1e-6
 
@@ -69,7 +74,13 @@ def stable_sigmoid(raw: np.ndarray) -> np.ndarray:
 
 
 def final_best_agent(seed: int) -> tuple[int, float]:
-    files = sorted((EXPERIMENT_DIR / "logs/selection").glob(f"selection.{seed}.*.csv"))
+    pattern = re.compile(rf"^selection\.{seed}\.(\d+)\.csv$")
+    files = sorted(
+        (EXPERIMENT_DIR / "logs/selection").glob(f"selection.{seed}.*.csv"),
+        key=lambda path: int(match.group(1))
+        if (match := pattern.match(path.name))
+        else -1,
+    )
     if not files:
         raise FileNotFoundError(f"No selection CSV found for seed {seed}")
     with files[-1].open(newline="") as handle:
@@ -86,16 +97,18 @@ def final_best_agent(seed: int) -> tuple[int, float]:
 
 
 def latest_checkpoint(seed: int) -> tuple[int, int]:
-    pattern = re.compile(rf"^cp\.(\d+)\.{seed}\.(\d+)\.rslt$")
+    # Match the normal replay command, which restores the most recent
+    # completed training (phase-0) checkpoint.
+    phase = 0
+    pattern = re.compile(rf"^cp\.(\d+)\.{seed}\.{phase}\.rslt$")
     candidates = []
-    for path in (EXPERIMENT_DIR / "checkpoints").glob(f"cp.*.{seed}.*.rslt"):
+    for path in (EXPERIMENT_DIR / "checkpoints").glob(f"cp.*.{seed}.{phase}.rslt"):
         match = pattern.match(path.name)
-        if match and "end" in path.read_text(errors="ignore"):
-            candidates.append((int(match.group(1)), int(match.group(2))))
+        if match and path.read_text(errors="ignore").rstrip().endswith("end"):
+            candidates.append(int(match.group(1)))
     if not candidates:
         raise FileNotFoundError(f"No completed checkpoint found for seed {seed}")
-    generation, phase = max(candidates)
-    return generation, phase
+    return max(candidates), phase
 
 
 def replay(seed: int, team_id: int) -> Path:
@@ -113,17 +126,16 @@ def replay(seed: int, team_id: int) -> Path:
         "start_from_checkpoint=1", f"checkpoint_in_phase={phase}",
         f"checkpoint_in_t={generation}", "replay=1", "animate=0",
         f"id_to_replay={team_id}", "task_to_replay=0",
-        f"gradient_n_eval_test={EPISODES}",
-        f"gradient_max_timestep={TIMESTEPS_PER_EPISODE}",
-        "gradient_save_video=0", "gradient_save_image=0",
     ]
     print("Running:", shlex.join(command))
     log_dir = EXPERIMENT_DIR / "logs/misc"
     log_dir.mkdir(parents=True, exist_ok=True)
+    trace = log_dir / f"mutation_rates.{seed}.{team_id}.csv"
+    # Do not mistake output from an older replay for a newly generated trace.
+    trace.unlink(missing_ok=True)
     with (log_dir / f"mutation_replay.{seed}.stdout").open("w") as stdout, \
          (log_dir / f"mutation_replay.{seed}.stderr").open("w") as stderr:
         subprocess.run(command, cwd=EXPERIMENT_DIR, stdout=stdout, stderr=stderr, check=True)
-    trace = log_dir / f"mutation_rates.{seed}.{team_id}.csv"
     if not trace.is_file():
         raise FileNotFoundError(
             f"Replay completed without producing {trace}. Verify that the executable "
@@ -135,36 +147,77 @@ def replay(seed: int, team_id: int) -> Path:
 def load_trace(path: Path) -> dict[str, np.ndarray]:
     with path.open(newline="") as handle:
         rows = list(csv.DictReader(handle))
-    full_trace_size = EPISODES * TIMESTEPS_PER_EPISODE
-    if len(rows) != full_trace_size:
-        raise ValueError(
-            f"{path} has {len(rows)} rows; expected the full {full_trace_size}-timestep trace"
-        )
-    # Recording frequency is a plotting concern: retain every Nth timestep
-    # from the complete replay trace without changing the replay executable.
-    rows = [
-        row for row in rows
-        if int(row["timestep"]) % RECORD_EVERY_TIMESTEPS == 0
-    ]
-    expected = EPISODES * (TIMESTEPS_PER_EPISODE // RECORD_EVERY_TIMESTEPS)
-    if len(rows) != expected:
-        raise ValueError(
-            f"{path} has {len(rows)} samples; expected exactly {expected} "
-            f"when recording every {RECORD_EVERY_TIMESTEPS} timestep(s)"
-        )
-    data: dict[str, np.ndarray] = {
-        "timestep": np.array(
-            [
-                int(row["episode"]) * TIMESTEPS_PER_EPISODE + int(row["timestep"])
-                for row in rows
-            ]
-        )
+    if not rows:
+        raise ValueError(f"Mutation-rate trace is empty: {path}")
+
+    required_columns = {
+        "episode",
+        "timestep",
+        *(
+            f"{version}_{rate}"
+            for rate in RATE_NAMES
+            for version in ("start", "output")
+        ),
     }
+    missing_columns = required_columns.difference(rows[0])
+    if missing_columns:
+        raise ValueError(
+            f"{path} is missing columns from the current S2-S6 trace format: "
+            f"{', '.join(sorted(missing_columns))}"
+        )
+
+    sample_steps = np.arange(
+        RECORD_EVERY_TIMESTEPS,
+        TIMESTEPS_PER_EPISODE + 1,
+        RECORD_EVERY_TIMESTEPS,
+    )
+    timesteps = np.concatenate(
+        [episode * TIMESTEPS_PER_EPISODE + sample_steps for episode in range(EPISODES)]
+    )
+    data: dict[str, np.ndarray] = {"timestep": timesteps}
     for rate in RATE_NAMES:
         for version in ("start", "output"):
-            raw = np.array([float(row[f"{version}_{rate}"]) for row in rows])
-            data[f"{version}_{rate}"] = stable_sigmoid(raw)
+            data[f"{version}_{rate}"] = np.full(timesteps.size, np.nan)
+
+    samples_per_episode = sample_steps.size
+    seen: set[tuple[int, int]] = set()
+    for row in rows:
+        episode = int(row["episode"])
+        timestep = int(row["timestep"])
+        if not 0 <= episode < EPISODES:
+            raise ValueError(f"{path} contains out-of-range episode {episode}")
+        if not 1 <= timestep <= TIMESTEPS_PER_EPISODE:
+            raise ValueError(f"{path} contains out-of-range timestep {timestep}")
+        key = (episode, timestep)
+        if key in seen:
+            raise ValueError(f"{path} contains duplicate sample {key}")
+        seen.add(key)
+        if timestep % RECORD_EVERY_TIMESTEPS:
+            continue
+        index = episode * samples_per_episode + timestep // RECORD_EVERY_TIMESTEPS - 1
+        for rate in RATE_NAMES:
+            for version in ("start", "output"):
+                data[f"{version}_{rate}"][index] = float(row[f"{version}_{rate}"])
+
+    if not any(timestep % RECORD_EVERY_TIMESTEPS == 0 for _, timestep in seen):
+        raise ValueError(
+            f"{path} contains no samples at the requested "
+            f"{RECORD_EVERY_TIMESTEPS}-timestep interval"
+        )
+    for rate in RATE_NAMES:
+        for version in ("start", "output"):
+            data[f"{version}_{rate}"] = stable_sigmoid(data[f"{version}_{rate}"])
     return data
+
+
+def first_finite(values: np.ndarray) -> float:
+    finite = values[np.isfinite(values)]
+    return float(finite[0]) if finite.size else np.nan
+
+
+def last_finite(values: np.ndarray) -> float:
+    finite = values[np.isfinite(values)]
+    return float(finite[-1]) if finite.size else np.nan
 
 
 def plot_page(
@@ -180,10 +233,12 @@ def plot_page(
         colour = RATE_COLOURS[rate]
         # The evolved constant is the initial condition at t=0. The remaining
         # points are the working-register outputs observed during replay.
-        y = np.concatenate(([data[f"start_{rate}"][0]], data[f"output_{rate}"]))
+        y = np.concatenate(
+            ([first_finite(data[f"start_{rate}"])], data[f"output_{rate}"])
+        )
         if std_data is not None:
             y_std = np.concatenate(
-                ([std_data[f"start_{rate}"][0]], std_data[f"output_{rate}"])
+                ([first_finite(std_data[f"start_{rate}"])], std_data[f"output_{rate}"])
             )
             ax.fill_between(
                 x,
@@ -222,8 +277,8 @@ def plot_stats_page(
         for rate in RATE_NAMES:
             row.extend(
                 [
-                    f"{data[f'start_{rate}'][0]:.5f}",
-                    f"{data[f'output_{rate}'][-1]:.5f}",
+                    f"{first_finite(data[f'start_{rate}']):.5f}",
+                    f"{last_finite(data[f'output_{rate}']):.5f}",
                 ]
             )
         rows.append(row)
@@ -236,11 +291,12 @@ def plot_stats_page(
             "Seed", "Team",
             "Swap S", "Swap F", "Delete S", "Delete F",
             "Add S", "Add F", "Mutate S", "Mutate F",
+            "Redund. S", "Redund. F",
         ],
         cellLoc="center",
         colLoc="center",
         loc="center",
-        colWidths=[0.07, 0.13, 0.095, 0.095, 0.095, 0.095, 0.095, 0.095, 0.10, 0.10],
+        colWidths=[0.06, 0.11] + [0.075] * (2 * len(RATE_NAMES)),
     )
     table.auto_set_font_size(False)
     table.set_fontsize(8)
@@ -257,6 +313,9 @@ def plot_stats_page(
 
 
 def main() -> None:
+    if not PARAMETERS_FILE.is_file():
+        print(f"Parameters file not found: {PARAMETERS_FILE}")
+        return
     if not REPLAY_EXECUTABLE.is_file():
         print(f"Replay executable not found: {REPLAY_EXECUTABLE}")
         return
@@ -268,9 +327,15 @@ def main() -> None:
         )
         return
 
+    try:
+        seeds = discover_seeds()
+    except FileNotFoundError as error:
+        print(error)
+        return
+
     traces = []
     labels = []
-    for seed in discover_seeds():
+    for seed in seeds:
         try:
             team_id, fitness = final_best_agent(seed)
             traces.append(load_trace(replay(seed, team_id)))
@@ -292,8 +357,26 @@ def main() -> None:
                 values = np.stack(
                     [trace[f"{version}_{rate}"] for trace in traces]
                 )
-                median[f"{version}_{rate}"] = np.median(values, axis=0)
-                standard_deviation[f"{version}_{rate}"] = np.std(values, axis=0)
+                valid = np.sum(np.isfinite(values), axis=0)
+                totals = np.nansum(values, axis=0)
+                means = np.divide(
+                    totals,
+                    valid,
+                    out=np.full(values.shape[1], np.nan),
+                    where=valid > 0,
+                )
+                variance = np.divide(
+                    np.nansum((values - means) ** 2, axis=0),
+                    valid,
+                    out=np.full(values.shape[1], np.nan),
+                    where=valid > 0,
+                )
+                median_values = np.full(values.shape[1], np.nan)
+                for index in np.flatnonzero(valid):
+                    column = values[:, index]
+                    median_values[index] = np.median(column[np.isfinite(column)])
+                median[f"{version}_{rate}"] = median_values
+                standard_deviation[f"{version}_{rate}"] = np.sqrt(variance)
         plot_page(
             pdf,
             median,

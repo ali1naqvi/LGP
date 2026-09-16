@@ -58,6 +58,7 @@ inline void EvalControl(TPG &tpg, EvalData &eval) {
                               WrapContinuousAction(eval), tpg.rngs_[AUX_SEED]);
         eval.stats_double[REWARD1_IDX] += r.r1;
         eval.AccumulateStepData();
+        tpg.LogReplaySelfModifyingRates(eval);
         eval.n_prediction++;
         eval.obs->Set(eval.task->GetObsVec(eval.partially_observable));
     }
@@ -97,6 +98,7 @@ inline void EvalControlViz(TPG &tpg, EvalData &eval,
                               WrapContinuousAction(eval), tpg.rngs_[AUX_SEED]);
         eval.stats_double[REWARD1_IDX] += r.r1;
         eval.AccumulateStepData();
+        tpg.LogReplaySelfModifyingRates(eval);
         eval.obs->Set(eval.task->GetObsVec(eval.partially_observable));
     }
     for (auto p : teamUseMapPerTask[tpg.state_["active_task"]]) {
