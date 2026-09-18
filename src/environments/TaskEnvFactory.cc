@@ -23,7 +23,16 @@ TaskEnv* TaskEnvFactory::createTask(const std::string& name, std::unordered_map<
         {"Cartpole", [](std::unordered_map<std::string, std::any>&) { return new CartPole(); }},
         {"Acrobot", [](std::unordered_map<std::string, std::any>&) { return new Acrobot(); }},
         {"CartCentering", [](std::unordered_map<std::string, std::any>&) { return new CartCentering(); }},
-        {"Pendulum", [](std::unordered_map<std::string, std::any>&) { return new Pendulum(); }},
+        {"Pendulum", [](std::unordered_map<std::string, std::any>& params) {
+            auto value = [&params](const char* key, int fallback) {
+                auto it = params.find(key);
+                return it == params.end() ? fallback : std::any_cast<int>(it->second);
+            };
+            return new Pendulum(value("pendulum_max_timesteps", 200),
+                                value("pendulum_n_eval_train", 20),
+                                value("pendulum_n_eval_validation", 0),
+                                value("pendulum_n_eval_test", 100));
+        }},
         {"MountainCar", [](std::unordered_map<std::string, std::any>&) { return new MountainCar(); }},
         {"MountainCarContinuous", [](std::unordered_map<std::string, std::any>&) { return new MountainCarContinuous(); }},
         {"Sunspots", [](std::unordered_map<std::string, std::any>&) { return new RecursiveForecast("Sunspots"); }},

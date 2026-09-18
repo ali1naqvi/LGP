@@ -1920,6 +1920,8 @@ void TPG::SetParams(int argc, char** argv) {
    // Preserve parent-produced rates through offspring mutation by default.
    // Set to 1 to reset working S2-S7 from constants before mutation instead.
    params_["reset_self_modifying_before_mutation"] = 0;
+   // Optional replay-only episode limit; 0 preserves each task's default.
+   params_["replay_max_timesteps"] = 0;
    if (argc > 1) {
       for (int i = 1; i < argc; ++i) {
          std::string arg = argv[i];
@@ -4368,7 +4370,10 @@ void TPG::WriteCheckpoint(bool elite) {
    auto filename = "checkpoints/cp." + to_string(GetState("t_current")) + "." +
                    to_string(seeds_[TPG_SEED]) + "." +
                    to_string(GetState("phase")) + ".rslt";
-   ofs.open(filename, ios::out);
+   // Publish only complete checkpoints. A timeout during writing must leave
+   // the previous generation available for resuming.
+   const auto temporary_filename = filename + ".tmp";
+   ofs.open(temporary_filename, ios::out);
    if (!ofs.is_open() || ofs.fail()) {
       std::cerr << "open failed for file: " << filename
            << " error:" << strerror(errno) << '\n';
@@ -4416,14 +4421,28 @@ void TPG::WriteCheckpoint(bool elite) {
    }
    ofs << "end" << endl;
    ofs.close();
+   if (ofs.fail()) {
+      die(__FILE__, __FUNCTION__, __LINE__, "Failed writing checkpoint; previous checkpoint retained.");
+   }
+   std::filesystem::rename(temporary_filename, filename);
 
-   // Remove old checkpoints.
-   std::regex reg("checkpoints/cp.*." + to_string(seeds_[TPG_SEED]) + "." +
-                  to_string(GetState("phase")) + ".rslt");
+   // Keep periodic training snapshots as well as the latest recovery file.
+   const int retain_every =
+       GetState("phase") == _TRAIN_PHASE &&
+       HaveParam("retain_train_checkpoints_every")
+           ? GetParam<int>("retain_train_checkpoints_every") : 0;
+   std::regex reg("^cp\\.([0-9]+)\\." + to_string(seeds_[TPG_SEED]) + "\\." +
+                  to_string(GetState("phase")) + "\\.rslt$");
    for (const auto& entry :
         std::filesystem::directory_iterator("checkpoints")) {
-      if (std::regex_match(entry.path().string(), reg) &&
+      const auto checkpoint_name = entry.path().filename().string();
+      std::smatch match;
+      if (std::regex_match(checkpoint_name, match, reg) &&
           entry.path().string() != filename) {
+         if (retain_every > 0 &&
+             std::stoll(match[1].str()) % retain_every == 0) {
+            continue;
+         }
          remove(entry.path().string().c_str());
       }
    }

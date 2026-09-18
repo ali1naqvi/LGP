@@ -57,17 +57,18 @@ class Pendulum : public ClassicControlEnv {
     double theta() { return internal_state_[StateIndex::kTheta]; }
     double thetaDot() { return internal_state_[StateIndex::kThetaDot]; }
 
-    Pendulum() {
-        n_eval_train_ = 20;
-        n_eval_validation_ = 0;
-        n_eval_test_ = 100;
+    Pendulum(int max_timesteps = 200, int train_episodes = 20,
+             int validation_episodes = 0, int test_episodes = 100) {
+        n_eval_train_ = train_episodes;
+        n_eval_validation_ = validation_episodes;
+        n_eval_test_ = test_episodes;
         dis_reset = std::uniform_real_distribution<>(-M_PI, M_PI);
         reset_dot_distribution_ = std::uniform_real_distribution<>(-1.0, 1.0);
         actionsDiscrete.push_back(-kMaxTorque);
         actionsDiscrete.push_back(0.0);
         actionsDiscrete.push_back(kMaxTorque);
         eval_type_ = "Control";
-        max_step_ = 300;
+        max_step_ = max_timesteps;
         internal_state_.reserve(kPendulumDimensions);
         internal_state_.resize(kPendulumDimensions);
 
@@ -75,8 +76,8 @@ class Pendulum : public ClassicControlEnv {
                     0.001 * pow(kMaxTorque, 2);
         state_.reserve(kPendulumStateSize);
         state_.resize(kPendulumStateSize);
-        state_po_.reserve(kPendulumStateSize - 1);
-        state_po_.resize(kPendulumStateSize - 1);
+        state_po_.reserve(kPendulumStateSize);
+        state_po_.resize(kPendulumStateSize);
     }
 
     //! Resets the pendulum to a initial state based on specified Bounds
@@ -114,8 +115,9 @@ class Pendulum : public ClassicControlEnv {
              sin(internal_state_[StateIndex::kTheta] + M_PI) +
              3.0 / (kMass * pow(kLength, 2)) * torque) * kTimeStep;
 
+        new_theta_dot = Bound(new_theta_dot, -kMaxSpeed, kMaxSpeed);
         internal_state_[StateIndex::kTheta] += new_theta_dot * kTimeStep;
-        internal_state_[StateIndex::kThetaDot] = Bound(new_theta_dot, -kMaxSpeed, kMaxSpeed);
+        internal_state_[StateIndex::kThetaDot] = new_theta_dot;
 
         state_[StateObservationIndex::kCosTheta] = state_po_[StateObservationIndex::kCosTheta] = cos(internal_state_[StateIndex::kTheta]);
         state_[StateObservationIndex::kSinTheta] = state_po_[StateObservationIndex::kSinTheta] = sin(internal_state_[StateIndex::kTheta]);

@@ -34,6 +34,13 @@ int main(int argc, char** argv) {
    // Read task sets from parameters and create environments
    auto [tasks, taskIndices] = initializeTasks(tpg);
 
+   if (tpg.GetParam<int>("replay") != 0 &&
+       tpg.GetParam<int>("replay_max_timesteps") > 0) {
+      for (auto* task : tasks) {
+         task->max_step_ = tpg.GetParam<int>("replay_max_timesteps");
+      }
+   }
+
    if (world.rank() == 0) {
       os << "world_size " << world.size() << endl;
       os << "n_task " << tpg.GetState("n_task") << endl;

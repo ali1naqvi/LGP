@@ -39,10 +39,10 @@ fi
 # Pickup from checkpoint #######################################################
 if [ $mode -eq 4 ]; then
   checkpoint_in_phase=0
-  checkpoint_in_t=$(grep -iRl end \
-  checkpoints/cp.*.${seed_tpg}.${checkpoint_in_phase}.rslt | \
-  cut -d '.' -f 2 | sort -n | tail -n 1)
-  pid=$(ls logs/tpg.${seed_tpg}.*.std | cut -d '.' -f 3 | tail -n 1)
+  checkpoint_in_t=$(python3 "$TPG/scripts/run/latest-checkpoint.py" \
+    "$seed_tpg" --phase "$checkpoint_in_phase") || exit 1
+  # Keep each resume attempt's logs; do not append to an arbitrary older job.
+  pid=${SLURM_JOB_ID:-$$}
   echo "Starting run ${seed_tpg} t ${checkpoint_in_t} pid $pid"
   srun $TPG/build/release/experiments/TPGExperimentMPI \
     parameters_file=${parameters_file} \

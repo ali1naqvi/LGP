@@ -15,8 +15,9 @@ ga_parameters:
   start_from_checkpoint: 0  # Whether to start from a checkpoint file
   checkpoint_in_t: 0  # Generation of the checkpoint file
   checkpoint_in_phase: 2  # 0: Training, 1: Validation, 2: Test
-  save_champ_checkpoints: 0  # 0: Training phase, 1: Validation phase, 2: Test phase
+  save_champ_checkpoints: 1  # 0: Training phase, 1: Validation phase, 2: Test phase
   write_train_checkpoints: 1  # Whether to save training checkpoints at each generation
+  retain_train_checkpoints_every: 100  # Keep every 100th generation plus the latest.
   write_phylogeny: 0  # Save phylogenetic data
   n_fit_mode: 1  # Number of fitness functions available
   fit_mode: 0  # Which fitness function to use, range is [0, n_fit_mode)
@@ -35,7 +36,7 @@ ga_parameters:
   seed_with_episode_number: 1  # Same episode seeds across candidate policies
   extinction_event_occurance: 1000000000 #TODO(ali): not working as of rn
   extinction_percentage: 0 #percent to keep during extinction event
-  validation_mod: 0
+  validation_mod: 100  # Validate every 100 generations, including generation 5000
   test_mod: 0
   modes_mod: 500  # Run MODES diagnostics every 500 generations (0 keeps only the initial baseline)
   pareto_objectives: ""
@@ -73,8 +74,8 @@ program_parameters:
   p_instructions_add: 0.1  # Probability of adding an instruction
   p_instructions_redundancy: 0.01  # Fixed rate or initial S6 adjacent-duplication probability
   n_mutation_passes: 1  # Number of stacked mutation passes per selected program
-  self_modifying: 0  # Enable S2-S6 mutation-rate readout and S7 decoy
-  evolve_self_modifying_constants: 0  # Evolve inherited S2-S7 constants when enabled
+  self_modifying: 1  # Enable S2-S6 mutation-rate readout and S7 decoy
+  evolve_self_modifying_constants: 1  # Evolve inherited S2-S7 constants when enabled
   reset_self_modifying_before_mutation: 0  # 1: inherited constants; 0: parent output rates
   operations_additive: 0  # Make every instruction add its result to the destination register
 
@@ -87,8 +88,8 @@ program_parameters:
   p_memory_slots: 0.0 # Program variation: probability of changing memory slots
   stateful: 1 # Use stateful programs
   skip_introns: 1  # Whether to skip introns during evaluation
-  continuous_output: 1  # Scalar S1 controls force, clamped by the task to [-1, 1]
-  n_input: "4"  # Position, velocity, and two noise observations
+  continuous_output: 1  # Scalar S1 controls torque, clamped by the task to [-2, 2]
+  n_input: "3"  # cos(theta), sin(theta), angular velocity
   min_prog_size: 1
   min_initial_prog_size: 1
   max_initial_prog_size: 25  # Max initial program size
@@ -119,7 +120,7 @@ program_parameters:
 # General Task Parameters
 general_task_parameters:
   # Which tasks are active
-  active_tasks: "MountainCarContinuous"  # Native classic-control environment
+  active_tasks: "Pendulum"  # Native classic-control environment
   partially_observable: 0  # Use the partially-observable version of a task, if available
   activation_function: 2
   n_discrete_action: 0  # Continuous force only
@@ -238,25 +239,25 @@ operations:
   # SCALAR_CUBE_OP: 1
 
   # # # Vector Operations:
-  VECTOR_HEAVYSIDE_OP: 1
-  MATRIX_HEAVYSIDE_OP: 1
-  SCALAR_VECTOR_PRODUCT_OP: 1
-  SCALAR_BROADCAST_OP: 1
-  VECTOR_RECIPROCAL_OP: 1
-  VECTOR_NORM_OP: 1
-  VECTOR_ABS_OP: 1
-  VECTOR_SUM_OP: 1
-  VECTOR_ACCUM_OP: 1
-  VECTOR_DIFF_OP: 1
-  VECTOR_PRODUCT_OP: 1
-  VECTOR_DIVISION_OP: 1
-  VECTOR_INNER_PRODUCT_OP: 1
-  VECTOR_MIN_OP: 1
-  VECTOR_MAX_OP: 1
-  VECTOR_MEAN_OP: 1
-  VECTOR_ST_DEV_OP: 1
-  VECTOR_CONST_SET_OP: 1
-  SCALAR_VECTOR_ASSIGN_OP: 1
+  # VECTOR_HEAVYSIDE_OP: 1
+  # MATRIX_HEAVYSIDE_OP: 1
+  # SCALAR_VECTOR_PRODUCT_OP: 1
+  # SCALAR_BROADCAST_OP: 1
+  # VECTOR_RECIPROCAL_OP: 1
+  # VECTOR_NORM_OP: 1
+  # VECTOR_ABS_OP: 1
+  # VECTOR_SUM_OP: 1
+  # VECTOR_ACCUM_OP: 1
+  # VECTOR_DIFF_OP: 1
+  # VECTOR_PRODUCT_OP: 1
+  # VECTOR_DIVISION_OP: 1
+  # VECTOR_INNER_PRODUCT_OP: 1
+  # VECTOR_MIN_OP: 1
+  # VECTOR_MAX_OP: 1
+  # VECTOR_MEAN_OP: 1
+  # VECTOR_ST_DEV_OP: 1
+  # VECTOR_CONST_SET_OP: 1
+  # SCALAR_VECTOR_ASSIGN_OP: 1
 
   # # Matrix Operations:
   # VECTOR_OUTER_PRODUCT_OP: 1
@@ -283,3 +284,12 @@ operations:
   # MATRIX_ST_DEV_OP: 1
   # MATRIX_CONST_SET_OP: 1
   # SCALAR_MATRIX_ASSIGN_OP: 1
+
+# Standard continuous Pendulum and evaluation budgets.
+pendulum_parameters:
+  pendulum_max_timesteps: 200
+  pendulum_n_eval_train: 20
+  pendulum_n_eval_validation: 5
+  pendulum_n_eval_test: 100
+  validation_episode_seed_offset: 10000
+  test_episode_seed_offset: 20000

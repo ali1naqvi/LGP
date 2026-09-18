@@ -191,7 +191,14 @@ inline void evaluator(TPG &tpg, mpi::communicator &world, vector<TaskEnv *> &tas
             eval_data.timestep = 0;
             eval_data.sample = 0;
             if (tpg.GetParam<int>("seed_with_episode_number")) {
-               tpg.rngs_[AUX_SEED].seed(eval_data.episode * 42);
+               int offset = 0;
+               if (tpg.GetState("phase") == _VALIDATION_PHASE &&
+                   tpg.HaveParam("validation_episode_seed_offset"))
+                  offset = tpg.GetParam<int>("validation_episode_seed_offset");
+               if (tpg.GetState("phase") == _TEST_PHASE &&
+                   tpg.HaveParam("test_episode_seed_offset"))
+                  offset = tpg.GetParam<int>("test_episode_seed_offset");
+               tpg.rngs_[AUX_SEED].seed((eval_data.episode + offset) * 42);
             }
             eval_data.tm->InitMemory(tpg.team_map_, tpg.params_);
             evaluator_map[eval_data.task->eval_type_](tpg, eval_data);
@@ -239,7 +246,9 @@ inline void replayer(TPG &tpg, vector<TaskEnv *> &tasks) {
               eval_data.timestep = 0;
               eval_data.sample = 0;
               if (tpg.GetParam<int>("seed_with_episode_number")) {
-                  tpg.rngs_[AUX_SEED].seed(eval_data.episode * 42);
+                  const int offset = tpg.HaveParam("test_episode_seed_offset")
+                      ? tpg.GetParam<int>("test_episode_seed_offset") : 0;
+                  tpg.rngs_[AUX_SEED].seed((eval_data.episode + offset) * 42);
               }
 
 

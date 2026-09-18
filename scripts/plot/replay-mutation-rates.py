@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 
-"""Replay each seed's final best agent and plot its S2-S6 rates by timestep."""
-
 import csv
 from pathlib import Path
 import re
@@ -16,16 +14,24 @@ import numpy as np
 
 
 REPO = Path(__file__).resolve().parents[2]
-RECORD_EVERY_TIMESTEPS = 10  # Use 1, 5, 10, etc.
+
+# Plot/replay controls.
+RECORD_EVERY_TIMESTEPS = 1  # Use 1, 5, 10, etc.
+EPISODES = 20
+EPISODE_TIMESTEPS = 200  # Replay-only episode length requested from the executable.
+PLOT_TIMESTEPS_PER_EPISODE = 200
+SMOOTHING_WINDOW_TIMESTEPS = 10  # Set to 1 to disable smoothing.
+REUSE_MUTATION_RATES = True
+
 TEST_SETUP = "mountaincar_continuous_execution_modified_rates"
 EXPERIMENT_DIR = REPO / "experiments" / TEST_SETUP
 PARAMETERS_FILE = REPO / "configs" / f"{TEST_SETUP}.yaml"
 OUTPUT_PDF = REPO / "output/pdf" / f"{TEST_SETUP}_mutation_rates.pdf"
-# MountainCarContinuous currently defines its replay evaluation count in the
-# task itself rather than in YAML.
-EPISODES = 100
-TIMESTEPS_PER_EPISODE = 200
-MPI_PROCESSES = 12
+REPLAY_OUTPUT_DIR = REPO / "output/replays" / TEST_SETUP
+SMOOTHING_WINDOW_SAMPLES = max(
+    1, round(SMOOTHING_WINDOW_TIMESTEPS / RECORD_EVERY_TIMESTEPS)
+)
+MPI_PROCESSES = 1
 REPLAY_EXECUTABLE = REPO / "build/release/experiments/TPGExperimentMPI"
 
 RATE_NAMES = ("swap", "delete", "add", "mutate", "redundancy")
@@ -73,7 +79,7 @@ def stable_sigmoid(raw: np.ndarray) -> np.ndarray:
     return EPSILON + (1.0 - 2.0 * EPSILON) * probability
 
 
-def final_best_agent(seed: int) -> tuple[int, float]:
+def selection_rows(seed: int) -> list[dict[str, str]]:
     pattern = re.compile(rf"^selection\.{seed}\.(\d+)\.csv$")
     files = sorted(
         (EXPERIMENT_DIR / "logs/selection").glob(f"selection.{seed}.*.csv"),
@@ -87,16 +93,30 @@ def final_best_agent(seed: int) -> tuple[int, float]:
         rows = list(csv.DictReader(handle))
     if not rows:
         raise ValueError(f"Selection CSV is empty: {files[-1]}")
-    # Match the normal replay command: highest training fitness, with the first
-    # generation that reached it used as the deterministic tie-breaker.
-    best = min(
-        rows,
-        key=lambda row: (-float(row["best_fitness"]), int(float(row["generation"]))),
-    )
+    return rows
+
+
+def final_best_agent(seed: int, generation: int) -> tuple[int, float]:
+    rows = selection_rows(seed)
+    matching = [
+        row for row in rows if int(float(row["generation"])) == generation
+    ]
+    best = matching[-1] if matching else rows[-1]
     return int(float(best["team_id"])), float(best["best_fitness"])
 
 
-def latest_checkpoint(seed: int) -> tuple[int, int]:
+def checkpoint_complete(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            size = handle.tell()
+            handle.seek(max(size - 32, 0))
+            return handle.read().rstrip().endswith(b"end")
+    except OSError:
+        return False
+
+
+def latest_checkpoint(seed: int) -> tuple[int, int, Path]:
     # Match the normal replay command, which restores the most recent
     # completed training (phase-0) checkpoint.
     phase = 0
@@ -104,43 +124,97 @@ def latest_checkpoint(seed: int) -> tuple[int, int]:
     candidates = []
     for path in (EXPERIMENT_DIR / "checkpoints").glob(f"cp.*.{seed}.{phase}.rslt"):
         match = pattern.match(path.name)
-        if match and path.read_text(errors="ignore").rstrip().endswith("end"):
-            candidates.append(int(match.group(1)))
+        if match and checkpoint_complete(path):
+            candidates.append((int(match.group(1)), path))
     if not candidates:
         raise FileNotFoundError(f"No completed checkpoint found for seed {seed}")
-    return max(candidates), phase
+    generation, path = max(candidates, key=lambda item: item[0])
+    return generation, phase, path
 
 
-def replay(seed: int, team_id: int) -> Path:
-    if not 1 <= RECORD_EVERY_TIMESTEPS <= TIMESTEPS_PER_EPISODE:
+def team_in_checkpoint(path: Path, team_id: int) -> bool:
+    needle = f"team:{team_id}:".encode()
+    with path.open("rb") as handle:
+        for line in handle:
+            if line.startswith(needle):
+                return True
+    return False
+
+
+def replay(seed: int, team_id: int, generation: int, phase: int) -> Path:
+    if not 1 <= RECORD_EVERY_TIMESTEPS <= EPISODE_TIMESTEPS:
         raise ValueError(
-            "RECORD_EVERY_TIMESTEPS must be between 1 and TIMESTEPS_PER_EPISODE"
+            "RECORD_EVERY_TIMESTEPS must be between 1 and EPISODE_TIMESTEPS"
         )
-    generation, phase = latest_checkpoint(seed)
+    REPLAY_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    trace_name = f"mutation_rates.{seed}.{team_id}.csv"
+    trace = REPLAY_OUTPUT_DIR / trace_name
+    if REUSE_MUTATION_RATES and trace.is_file():
+        try:
+            load_trace(trace)
+        except ValueError as error:
+            print(f"Existing trace is invalid; replaying seed {seed}: {error}")
+        else:
+            print(f"Reusing: {trace}")
+            return trace
+
     executable = REPLAY_EXECUTABLE
     if not executable.is_file():
         raise FileNotFoundError(f"Build the replay executable first: {executable}")
+    if b"mutation_rates." not in executable.read_bytes():
+        raise FileNotFoundError(
+            "Replay executable does not contain per-timestep mutation-rate tracing. "
+            "Restore the engine-side logger and rebuild the executable."
+        )
     command = [
         "mpirun", "--oversubscribe", "-np", str(MPI_PROCESSES), str(executable),
         f"parameters_file={PARAMETERS_FILE}", f"seed_tpg={seed}", "seed_aux=42",
         "start_from_checkpoint=1", f"checkpoint_in_phase={phase}",
         f"checkpoint_in_t={generation}", "replay=1", "animate=0",
         f"id_to_replay={team_id}", "task_to_replay=0",
+        f"replay_max_timesteps={EPISODE_TIMESTEPS}",
     ]
     print("Running:", shlex.join(command))
-    log_dir = EXPERIMENT_DIR / "logs/misc"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    trace = log_dir / f"mutation_rates.{seed}.{team_id}.csv"
+    stdout_path = REPLAY_OUTPUT_DIR / f"mutation_replay.{seed}.stdout"
+    stderr_path = REPLAY_OUTPUT_DIR / f"mutation_replay.{seed}.stderr"
+    engine_trace = EXPERIMENT_DIR / "logs/misc" / trace_name
+    engine_trace.parent.mkdir(parents=True, exist_ok=True)
     # Do not mistake output from an older replay for a newly generated trace.
-    trace.unlink(missing_ok=True)
-    with (log_dir / f"mutation_replay.{seed}.stdout").open("w") as stdout, \
-         (log_dir / f"mutation_replay.{seed}.stderr").open("w") as stderr:
-        subprocess.run(command, cwd=EXPERIMENT_DIR, stdout=stdout, stderr=stderr, check=True)
-    if not trace.is_file():
+    previous_engine_trace = (
+        engine_trace.read_bytes() if engine_trace.is_file() else None
+    )
+    engine_trace.unlink(missing_ok=True)
+    try:
+        with stdout_path.open("w") as stdout, stderr_path.open("w") as stderr:
+            subprocess.run(
+                command,
+                cwd=EXPERIMENT_DIR,
+                stdout=stdout,
+                stderr=stderr,
+                check=True,
+            )
+    except subprocess.CalledProcessError:
+        engine_trace.unlink(missing_ok=True)
+        if previous_engine_trace is not None:
+            engine_trace.write_bytes(previous_engine_trace)
+        raise
+    stdout_text = stdout_path.read_text(errors="ignore")
+    if f"Evaluation result team:{team_id}" not in stdout_text:
+        engine_trace.unlink(missing_ok=True)
+        if previous_engine_trace is not None:
+            engine_trace.write_bytes(previous_engine_trace)
         raise FileNotFoundError(
-            f"Replay completed without producing {trace}. Verify that the executable "
+            f"Replay finished without evaluating team {team_id} for seed {seed}. "
+            "The team is missing from the restored checkpoint."
+        )
+    if not engine_trace.is_file():
+        if previous_engine_trace is not None:
+            engine_trace.write_bytes(previous_engine_trace)
+        raise FileNotFoundError(
+            f"Replay completed without producing {engine_trace}. Verify that the executable "
             "was rebuilt with LogReplaySelfModifyingRates enabled."
         )
+    engine_trace.replace(trace)
     return trace
 
 
@@ -168,11 +242,11 @@ def load_trace(path: Path) -> dict[str, np.ndarray]:
 
     sample_steps = np.arange(
         RECORD_EVERY_TIMESTEPS,
-        TIMESTEPS_PER_EPISODE + 1,
+        PLOT_TIMESTEPS_PER_EPISODE + 1,
         RECORD_EVERY_TIMESTEPS,
     )
     timesteps = np.concatenate(
-        [episode * TIMESTEPS_PER_EPISODE + sample_steps for episode in range(EPISODES)]
+        [episode * PLOT_TIMESTEPS_PER_EPISODE + sample_steps for episode in range(EPISODES)]
     )
     data: dict[str, np.ndarray] = {"timestep": timesteps}
     for rate in RATE_NAMES:
@@ -184,10 +258,16 @@ def load_trace(path: Path) -> dict[str, np.ndarray]:
     for row in rows:
         episode = int(row["episode"])
         timestep = int(row["timestep"])
-        if not 0 <= episode < EPISODES:
-            raise ValueError(f"{path} contains out-of-range episode {episode}")
-        if not 1 <= timestep <= TIMESTEPS_PER_EPISODE:
+        if episode < 0:
+            raise ValueError(f"{path} contains negative episode {episode}")
+        # A replay may contain more episodes than this plot requests. Keep the
+        # cache reusable and plot only the configured leading episodes.
+        if episode >= EPISODES:
+            continue
+        if not 1 <= timestep <= EPISODE_TIMESTEPS:
             raise ValueError(f"{path} contains out-of-range timestep {timestep}")
+        if timestep > PLOT_TIMESTEPS_PER_EPISODE:
+            continue
         key = (episode, timestep)
         if key in seen:
             raise ValueError(f"{path} contains duplicate sample {key}")
@@ -220,6 +300,28 @@ def last_finite(values: np.ndarray) -> float:
     return float(finite[-1]) if finite.size else np.nan
 
 
+def smooth_series(values: np.ndarray) -> np.ndarray:
+    """Return a continuous centered moving average for plotting.
+
+    Replay logging can omit timesteps when no self-modifying program is
+    active. Interpolate those missing plotting samples so lines do not break;
+    the source CSVs and summary statistics are left unchanged.
+    """
+    if SMOOTHING_WINDOW_SAMPLES <= 1:
+        return values.copy()
+    window_size = min(SMOOTHING_WINDOW_SAMPLES, values.size)
+    kernel = np.ones(window_size, dtype=float)
+    finite = np.isfinite(values)
+    if not finite.any():
+        return values.copy()
+    positions = np.arange(values.size)
+    filled = np.interp(positions, positions[finite], values[finite])
+    left = window_size // 2
+    right = window_size - 1 - left
+    padded = np.pad(filled, (left, right), mode="edge")
+    return np.convolve(padded, kernel / window_size, mode="valid")
+
+
 def plot_page(
     pdf: PdfPages,
     data: dict[str, np.ndarray],
@@ -232,13 +334,19 @@ def plot_page(
     for rate in RATE_NAMES:
         colour = RATE_COLOURS[rate]
         # The evolved constant is the initial condition at t=0. The remaining
-        # points are the working-register outputs observed during replay.
+        # points are smoothed working-register outputs observed during replay.
         y = np.concatenate(
-            ([first_finite(data[f"start_{rate}"])], data[f"output_{rate}"])
+            (
+                [first_finite(data[f"start_{rate}"])],
+                smooth_series(data[f"output_{rate}"]),
+            )
         )
         if std_data is not None:
             y_std = np.concatenate(
-                ([first_finite(std_data[f"start_{rate}"])], std_data[f"output_{rate}"])
+                (
+                    [first_finite(std_data[f"start_{rate}"])],
+                    smooth_series(std_data[f"output_{rate}"]),
+                )
             )
             ax.fill_between(
                 x,
@@ -251,13 +359,18 @@ def plot_page(
         ax.plot(x, y, color=colour, linewidth=2.0, label=RATE_LABELS[rate])
         ax.scatter([0], [y[0]], color=colour, s=28, zorder=3)
     for boundary in range(
-        TIMESTEPS_PER_EPISODE,
-        EPISODES * TIMESTEPS_PER_EPISODE,
-        TIMESTEPS_PER_EPISODE,
+        PLOT_TIMESTEPS_PER_EPISODE,
+        EPISODES * PLOT_TIMESTEPS_PER_EPISODE,
+        PLOT_TIMESTEPS_PER_EPISODE,
     ):
         ax.axvline(boundary + 0.5, color="0.75", linewidth=0.8)
-    ax.set(title=title, xlabel="Timestep across episodes", ylabel="Mutation probability")
-    ax.set_xlim(0, EPISODES * TIMESTEPS_PER_EPISODE)
+    smoothing_timesteps = SMOOTHING_WINDOW_SAMPLES * RECORD_EVERY_TIMESTEPS
+    ax.set(
+        title=f"{title}\nCentered moving average: {smoothing_timesteps} timesteps",
+        xlabel="Timestep across episodes",
+        ylabel="Mutation probability",
+    )
+    ax.set_xlim(0, EPISODES * PLOT_TIMESTEPS_PER_EPISODE)
     ax.set_ylim(0, 1)
     ax.grid(alpha=0.2)
     ax.legend(ncol=2, fontsize=9, loc="upper right")
@@ -316,16 +429,6 @@ def main() -> None:
     if not PARAMETERS_FILE.is_file():
         print(f"Parameters file not found: {PARAMETERS_FILE}")
         return
-    if not REPLAY_EXECUTABLE.is_file():
-        print(f"Replay executable not found: {REPLAY_EXECUTABLE}")
-        return
-    if b"mutation_rates." not in REPLAY_EXECUTABLE.read_bytes():
-        print(
-            "Replay executable does not contain per-timestep mutation-rate tracing. "
-            "No seeds were run. The stock replay output does not expose these values; "
-            "the engine-side logger must be restored and the executable rebuilt."
-        )
-        return
 
     try:
         seeds = discover_seeds()
@@ -337,8 +440,13 @@ def main() -> None:
     labels = []
     for seed in seeds:
         try:
-            team_id, fitness = final_best_agent(seed)
-            traces.append(load_trace(replay(seed, team_id)))
+            generation, phase, checkpoint = latest_checkpoint(seed)
+            team_id, fitness = final_best_agent(seed, generation)
+            if not team_in_checkpoint(checkpoint, team_id):
+                raise FileNotFoundError(
+                    f"Team {team_id} is not in {checkpoint.name}"
+                )
+            traces.append(load_trace(replay(seed, team_id, generation, phase)))
             labels.append((seed, team_id, fitness))
         except (FileNotFoundError, ValueError, subprocess.CalledProcessError) as error:
             print(f"Skipping seed {seed}: {error}")
