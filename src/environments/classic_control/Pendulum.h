@@ -58,7 +58,7 @@ class Pendulum : public ClassicControlEnv {
     double thetaDot() { return internal_state_[StateIndex::kThetaDot]; }
 
     Pendulum(int max_timesteps = 200, int train_episodes = 20,
-             int validation_episodes = 0, int test_episodes = 100) {
+             int validation_episodes = 5, int test_episodes = 100) {
         n_eval_train_ = train_episodes;
         n_eval_validation_ = validation_episodes;
         n_eval_test_ = test_episodes;

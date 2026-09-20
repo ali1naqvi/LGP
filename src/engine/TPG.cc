@@ -1497,6 +1497,14 @@ void TPG::UpdateTeamPhyloData(team* tm) {
        tm->numEffectiveInstructions();
 }
 
+namespace {
+bool HasEnoughPhaseOutcomes(team* tm, TaskEnv* task, int phase, int task_idx) {
+   if (!tm || !task) return false;
+   const int needed = task->GetNumEval(phase);
+   return needed > 0 && tm->numOutcomes(phase, task_idx) >= needed;
+}
+}  // namespace
+
 /******************************************************************************/
 // Find the elite single-task program graphs
 void TPG::FindSingleTaskFitnessRange(vector<TaskEnv*>& tasks,
@@ -1507,8 +1515,7 @@ void TPG::FindSingleTaskFitnessRange(vector<TaskEnv*>& tasks,
       teamsRankedVec.clear();
       for (auto tm : GetRootTeamsInVec()) {
          tm->elite(GetState("phase"), false);  // mark team as not elite
-         if (tm->numOutcomes(GetState("phase"), task) >=
-             tasks[task]->GetNumEval(GetState("phase"))) {
+         if (HasEnoughPhaseOutcomes(tm, tasks[task], GetState("phase"), task)) {
             tm->fit_ = tm->GetMeanOutcome(GetState("phase"), task,
                                             GetState("fitMode"));
             teamsRankedVec.push_back(tm);
@@ -1517,7 +1524,7 @@ void TPG::FindSingleTaskFitnessRange(vector<TaskEnv*>& tasks,
             }
          } else {
             // mark elite to protect until eval in all tasks
-            tm->elite(true);
+            tm->elite(GetState("phase"), true);
          }
       }
       if (teamsRankedVec.size() > 0) {
@@ -1537,8 +1544,7 @@ void TPG::FindSingleTaskMinMax(vector<TaskEnv*>& tasks,
       teamsRankedVec.clear();
       for (auto tm : GetRootTeamsInVec()) {
          tm->elite(GetState("phase"), false);
-         if (tm->numOutcomes(GetState("phase"), task) >=
-             tasks[task]->GetNumEval(GetState("phase"))) {
+         if (HasEnoughPhaseOutcomes(tm, tasks[task], GetState("phase"), task)) {
             tm->fit_ = tm->GetMeanOutcome(GetState("phase"), task,
                                             GetState("fitMode"));
             teamsRankedVec.push_back(tm);
@@ -1561,20 +1567,34 @@ vector<team*> TPG::NormalizeScoresAndRankTeams(
     vector<TaskEnv*>& tasks, vector<int>& set,
     vector<vector<double>>& min_scores, vector<vector<double>>& max_scores) {
    vector<team*> vec;
+   // A subset can only be ranked when every task enables this phase.
+   for (int task : set) {
+      if (tasks[task]->GetNumEval(GetState("phase")) <= 0) return vec;
+   }
    for (auto tm : GetRootTeamsInVec()) {
-      if (GetState("phase") == _TEST_PHASE &&
-          tm->id_ != (_eliteTeamPS[VectorToStringNoSpace(set)][GetParam<int>(
-                          "fit_mode")][_VALIDATION_PHASE])
-                         ->id_) {
-         continue;
+      const string set_key = VectorToStringNoSpace(set);
+      if (GetState("phase") == _TEST_PHASE) {
+         if (!haveEliteTeam(set_key, GetParam<int>("fit_mode"),
+                            _VALIDATION_PHASE)) {
+            die(__FILE__, __FUNCTION__, __LINE__,
+                "Test ranking requires a validation champion.");
+         }
+         auto* validation_champ =
+             _eliteTeamPS[set_key][GetParam<int>("fit_mode")][_VALIDATION_PHASE];
+         if (!validation_champ) {
+            die(__FILE__, __FUNCTION__, __LINE__,
+                "Test ranking requires a non-null validation champion.");
+         }
+         if (tm->id_ != validation_champ->id_) {
+            continue;
+         }
       }
       vector<double> normalizedScores;
       for (size_t task = 0; task < set.size(); task++) {
-         if (tm->numOutcomes(GetState("phase"), set[task]) <
-             tasks[set[task]]->GetNumEval(GetState("phase"))) {
+         if (!HasEnoughPhaseOutcomes(tm, tasks[set[task]], GetState("phase"),
+                                     set[task])) {
             die(__FILE__, __FUNCTION__, __LINE__,
-                "All root teams should have enough evaluations at this "
-                "point.");
+                "Missing required evaluations for an enabled task phase.");
          }
          auto raw_mean_score = tm->GetMeanOutcome(
              GetState("phase"), set[task], GetState("fitMode"));
@@ -1589,10 +1609,6 @@ vector<team*> TPG::NormalizeScoresAndRankTeams(
             normalizedScores.push_back(
                 raw_mean_score / max_scores[GetState("fitMode")][set[task]]);
          }
-      }
-      if (normalizedScores.size() != set.size()) {
-         die(__FILE__, __FUNCTION__, __LINE__,
-             "This team should have a score for all tasks.");
       }
       tm->fit_ = *min_element(normalizedScores.begin(), normalizedScores.end());
       // TODO(skelly): debug, test, and cleanup complexity record
@@ -1617,6 +1633,11 @@ void TPG::FindMultiTaskElites(vector<TaskEnv*>& tasks,
              .clear();  // TODO(skelly): check this
       auto teams_normed_scores =
           NormalizeScoresAndRankTeams(tasks, set, min_scores, max_scores);
+      if (teams_normed_scores.empty()) {
+         _eliteTeamPS[VectorToStringNoSpace(set)][GetState("fitMode")]
+             .erase(GetState("phase"));
+         continue;
+      }
 
       // A shadow run replaces fitness-based survivor selection with a
       // reproducible random ordering.  Use the evolution RNG (seed_tpg), not
@@ -1679,7 +1700,7 @@ void TPG::SetXPredPreyEliteTeams(vector<TaskEnv*>& tasks) {
       vector<team*> ranked;
       for (auto* tm : GetRootTeamsInVec()) {
          if (tm->populationRole() != role) continue;
-         if (tm->numOutcomes(phase, 0) < tasks.front()->GetNumEval(phase)) {
+         if (!HasEnoughPhaseOutcomes(tm, tasks.front(), phase, 0)) {
             tm->elite(phase, true);
             ++_numEliteTeamsCurrent[phase];
             continue;
@@ -1746,14 +1767,16 @@ void TPG::SetEliteTeams(vector<TaskEnv*>& tasks) {
 
    auto PS = PowerSet(GetState("n_task"));
    for (auto& set : PS) {
-      auto elite_id = _eliteTeamPS[VectorToStringNoSpace(set)][GetState("fitMode")]
-                                  [GetState("phase")]
-                                      ->id_;
+      const string set_key = VectorToStringNoSpace(set);
+      if (!haveEliteTeam(set_key, GetState("fitMode"), GetState("phase"))) {
+         continue;
+      }
+      auto* elite = _eliteTeamPS[set_key][GetState("fitMode")][GetState("phase")];
+      if (!elite) continue;
+      auto elite_id = elite->id_;
       const bool is_full_task_set =
           set.size() == static_cast<size_t>(GetState("n_task"));
-      if (is_full_task_set &&
-          haveEliteTeam(VectorToStringNoSpace(set), GetState("fitMode"),
-                        GetState("phase"))) {
+      if (is_full_task_set) {
          oss << "setElTmsMTA eLSz " << _numEliteTeamsCurrent[GetState("phase")]
              << " ss " << VectorToStringNoSpace(set) << " fm " << GetState("fitMode")
              << " minThr "
@@ -1777,9 +1800,7 @@ void TPG::SetEliteTeams(vector<TaskEnv*>& tasks) {
             elite_team_id_history_.insert(elite_id);
             WriteCheckpoint(false);
          }
-      } else if (set.size() == 1 &&
-                 haveEliteTeam(VectorToStringNoSpace(set), GetState("fitMode"),
-                               GetState("phase"))) {
+      } else if (set.size() == 1) {
          oss << "setElTmsST eLSz " << _numEliteTeamsCurrent[GetState("phase")]
              << " ss " << VectorToStringNoSpace(set) << " fm " << GetState("fitMode")
              << " minThr "

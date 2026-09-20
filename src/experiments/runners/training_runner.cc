@@ -81,15 +81,33 @@ void TrainingRunner::trainingLoop() {
              (tpg_.HaveParam("validation_mod") ? tpg_.GetParam<int>("validation_mod")
                                                : 0);
 
-         bool do_test = (test_mod > 0) && not_first_generation && (t % test_mod == 0);
+         int validation_tasks = 0;
+         int test_tasks = 0;
+         for (auto* task : tasks_) {
+            validation_tasks += task->GetNumEval(_VALIDATION_PHASE) > 0;
+            test_tasks += task->GetNumEval(_TEST_PHASE) > 0;
+         }
+         bool do_test = (test_mod > 0) && not_first_generation &&
+                        (t % test_mod == 0) && test_tasks > 0;
+         if (do_test) {
+            for (auto* task : tasks_) {
+               if (task->GetNumEval(_TEST_PHASE) > 0 &&
+                   task->GetNumEval(_VALIDATION_PHASE) <= 0) {
+                  die(__FILE__, __FUNCTION__, __LINE__,
+                      "Every task with test episodes must also have validation episodes.");
+               }
+            }
+         }
          // If we're testing, we must validate first (test uses validation champions).
          bool do_validation =
-             ((validation_mod > 0) && not_first_generation && (t % validation_mod == 0)) ||
-             do_test;
+             ((((validation_mod > 0) && not_first_generation &&
+                (t % validation_mod == 0)) ||
+               do_test) &&
+              validation_tasks > 0);
 
          if (do_validation) {
             tpg_.oss << "validate t " << t << " mod " << (validation_mod > 0 ? validation_mod : test_mod)
-                     << " n_eval_validation " << tasks_[0]->GetNumEval(_VALIDATION_PHASE)
+                     << " validation_tasks " << validation_tasks
                      << std::endl;
             tpg_.state_["phase"] = _VALIDATION_PHASE;
             evaluate_main(tpg_, world_, tasks_, taskIndices_);
@@ -99,7 +117,7 @@ void TrainingRunner::trainingLoop() {
 
          if (do_test) {
             tpg_.oss << "test t " << t << " mod " << test_mod
-                     << " n_eval_test " << tasks_[0]->GetNumEval(_TEST_PHASE)
+                     << " test_tasks " << test_tasks
                      << std::endl;
             tpg_.state_["phase"] = _TEST_PHASE;
             evaluate_main(tpg_, world_, tasks_, taskIndices_);

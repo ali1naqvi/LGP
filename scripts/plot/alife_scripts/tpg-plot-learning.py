@@ -5,19 +5,19 @@ plt.style.use("seaborn-v0_8-whitegrid")  # clean grid‑based style
 import os
 import glob
 
-generations = 10000
+generations = 100
 
-experiment_name_1 = "gradient_test_original"
-experiment_name_2 = "gradient_test_static_constants"
-experiment_name_3 = "gradient_test_lamark"
-experiment_name_4 = "gradient_test_baldwin"
+experiment_name_1 = "pendulum_execution_modified_rates"
+experiment_name_2 = "pendulum_fixed_rates"
+experiment_name_3 = "pendulum_inherited_rates"
+# experiment_name_4 = "gradient_test_baldwin"
 # experiment_name_5 = "gradient_test_10k"
 
-base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../", "tpg", "experiments"))
+base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..", "experiments"))
 exp_dir_1 = os.path.join(base_path, experiment_name_1, "logs", "selection")
 exp_dir_2 = os.path.join(base_path, experiment_name_2, "logs", "selection")
 exp_dir_3 = os.path.join(base_path, experiment_name_3, "logs", "selection")
-exp_dir_4 = os.path.join(base_path, experiment_name_4, "logs", "selection")
+# exp_dir_4 = os.path.join(base_path, experiment_name_4, "logs", "selection")
 # exp_dir_5 = os.path.join(base_path, experiment_name_5, "logs", "selection")
 # exp_dir_6 = os.path.join(base_path, experiment_name_6, "logs", "selection")
 # print(exp_dir_3)
@@ -25,10 +25,15 @@ exp_dir_4 = os.path.join(base_path, experiment_name_4, "logs", "selection")
 def load_best_fitness_reps(exp_dir):
     pattern = os.path.join(exp_dir, "selection.*.0.csv")
     files = sorted(glob.glob(pattern))
+    if not files:
+        raise FileNotFoundError(f"No selection logs found matching: {pattern}")
     reps = []
     for f in files:
-        df = pd.read_csv(f, usecols=["best_fitness"])
-        vals = df["best_fitness"].values
+        try:
+            df = pd.read_csv(f, usecols=["program_instruction_count"])
+        except pd.errors.EmptyDataError:
+            continue
+        vals = df["program_instruction_count"].values
         
         # df = pd.read_csv(f, usecols=["best_agent_effective_register_size"])
         # df2 = pd.read_csv(f, usecols=["best_agent_register_size"])
@@ -49,7 +54,7 @@ def load_best_fitness_reps(exp_dir):
             vals = vals[:generations]
         reps.append(vals)
     if not reps:
-        return None
+        raise ValueError(f"No data rows found in selection logs matching: {pattern}")
     data = np.vstack(reps)  # shape: (num_seeds, 250)
     gens = np.arange(generations)
     medians = np.mean(data, axis=0)
@@ -67,23 +72,23 @@ if __name__ == "__main__":
     result1 = load_best_fitness_reps(exp_dir_1)
     result2 = load_best_fitness_reps(exp_dir_2)
     result3 = load_best_fitness_reps(exp_dir_3)
-    result4 = load_best_fitness_reps(exp_dir_4)
+    # result4 = load_best_fitness_reps(exp_dir_4)
     # result5 = load_best_fitness_reps(exp_dir_5)
     # result6 = load_best_fitness_reps(exp_dir_6)
 
     gens1, med1, q25_1, q75_1 = result1
     gens2, med2, q25_2, q75_2 = result2
     gens3, med3, q25_3, q75_3 = result3
-    gens4, med4, q25_4, q75_4 = result4
+    # gens4, med4, q25_4, q75_4 = result4
     # gens5, med5, q25_5, q75_5 = result5
     # gens6, med6, q25_6, q75_6 = result6
 
     plt.figure(figsize=(6,4))
 
-    AddToPlot(gens1, med1, q25_1, q75_1, "OG", color='tab:green')
-    AddToPlot(gens2, med2, q25_2, q75_2, "STATIC CONSTANTS", color='tab:blue')
-    AddToPlot(gens3, med3, q25_3, q75_3, "lamarkism", color='tab:orange')
-    AddToPlot(gens4, med4, q25_4, q75_4, "BALDWIN", color='tab:red')
+    AddToPlot(gens1, med1, q25_1, q75_1, "Modified Rates", color='tab:green')
+    AddToPlot(gens2, med2, q25_2, q75_2, "Fixed Rates", color='tab:blue')
+    AddToPlot(gens3, med3, q25_3, q75_3, "Inherited Rates", color='tab:orange')
+    # AddToPlot(gens4, med4, q25_4, q75_4, "BALDWIN", color='tab:red')
     # AddToPlot(gens5, med5, q25_5, q75_5, "Memory with Reward Difference", color='teal')
     # AddToPlot(gens6, med6, q25_6, q75_6, "No RC", color='teal')
     

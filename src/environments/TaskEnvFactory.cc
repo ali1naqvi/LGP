@@ -30,7 +30,7 @@ TaskEnv* TaskEnvFactory::createTask(const std::string& name, std::unordered_map<
             };
             return new Pendulum(value("pendulum_max_timesteps", 200),
                                 value("pendulum_n_eval_train", 20),
-                                value("pendulum_n_eval_validation", 0),
+                                value("pendulum_n_eval_validation", 5),
                                 value("pendulum_n_eval_test", 100));
         }},
         {"MountainCar", [](std::unordered_map<std::string, std::any>&) { return new MountainCar(); }},

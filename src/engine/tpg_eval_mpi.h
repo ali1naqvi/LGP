@@ -60,9 +60,15 @@ inline vector<team *> GetTeamsToEval(TPG &tpg, TaskEnv *task) {
     // Test the single validation champion for each subset.
     auto PS = PowerSet(tpg.GetState("n_task"));
     for (auto &set : PS) {
+      const string set_key = VectorToStringNoSpace(set);
+      if (!tpg.haveEliteTeam(set_key, tpg.GetParam<int>("fit_mode"),
+                             _VALIDATION_PHASE)) {
+        continue;
+      }
       auto tm =
-          tpg._eliteTeamPS[VectorToStringNoSpace(set)][tpg.GetParam<int>("fit_mode")]
+          tpg._eliteTeamPS[set_key][tpg.GetParam<int>("fit_mode")]
                           [_VALIDATION_PHASE];
+      if (!tm) continue;
       tm->_n_eval =
           task->GetNumEval(tpg.GetState("phase")) -
           tm->numOutcomes(tpg.GetState("phase"), tpg.GetState("active_task"));
