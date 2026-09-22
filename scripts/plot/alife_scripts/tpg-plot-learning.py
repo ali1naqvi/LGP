@@ -5,7 +5,7 @@ plt.style.use("seaborn-v0_8-whitegrid")  # clean grid‑based style
 import os
 import glob
 
-generations = 100
+generations = 2000
 
 experiment_name_1 = "pendulum_execution_modified_rates"
 experiment_name_2 = "pendulum_fixed_rates"
@@ -30,10 +30,10 @@ def load_best_fitness_reps(exp_dir):
     reps = []
     for f in files:
         try:
-            df = pd.read_csv(f, usecols=["program_instruction_count"])
+            df = pd.read_csv(f, usecols=["effective_program_instruction_count"])
         except pd.errors.EmptyDataError:
             continue
-        vals = df["program_instruction_count"].values
+        vals = df["effective_program_instruction_count"].values
         
         # df = pd.read_csv(f, usecols=["best_agent_effective_register_size"])
         # df2 = pd.read_csv(f, usecols=["best_agent_register_size"])
@@ -110,4 +110,4 @@ if __name__ == "__main__":
     plt.xticks(fontsize=16)
     plt.yticks(fontsize=16)
 
-    plt.savefig("results.pdf", format="pdf", bbox_inches="tight")
+    plt.savefig("effective_total_instructions.pdf", format="pdf", bbox_inches="tight")

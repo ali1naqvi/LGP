@@ -1,118 +1,70 @@
+import glob
+import os
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-plt.style.use("seaborn-v0_8-whitegrid")  # clean grid‑based style
-import os
-import glob
 
-generations = 3000
+plt.style.use("seaborn-v0_8-whitegrid")  # clean grid-based style
 
-# experiment_name_1 = "7_reacher_baseline_2"
-# experiment_name_2 = "7_reacher_baseline_10"
-# experiment_name_3 = "7_reacher_baseline_17"
-# experiment_name_4 = "7_reacher_dyn_no_rc_fitness_tot_reg"
-# experiment_name_5 = "7_reacher_dyn_rc_fitness_tot_regs"
-# experiment_name_6 = "7_reacher_dyn_start_fitness_tot_regs"
+validation_interval = 100
+generations = 2000
 
-experiment_name_1 = "7_reacher_baseline_2"
-experiment_name_2 = "7_reacher_baseline_10"
-experiment_name_3 = "7_reacher_baseline_17"
-experiment_name_4 = "static_starting/7_reacher_dyn_rc_fitness_tot_regs"
-experiment_name_5 = "static_starting/7_reacher_dyn_no_rc_fitness_tot_reg"
+experiment_name_1 = "pendulum_execution_modified_rates"
+experiment_name_2 = "pendulum_fixed_rates"
+experiment_name_3 = "pendulum_inherited_rates"
+# experiment_name_4 = "gradient_test_baldwin"
+# experiment_name_5 = "gradient_test_10k"
 
-# experiment_name_1 = "5_ant_baseline_8"
-# experiment_name_2 = "5_ant_baseline_27"
-# experiment_name_3 = "5_ant_baseline_40"
-# experiment_name_4 = "ant_dynamic_start/5_ant_dynamic_fitness_tot-reg"
-# experiment_name_5 = "static_starting/5_ant_dynamic_1_fitness_tot-reg"
-# experiment_name_6 = "ant_dynamic_no_register_clone/5_ant_dynamic_fitness_tot-reg"
-
-
-# experiment_name_1 = "5_ant_baseline_8"
-# experiment_name_2 = "5_ant_baseline_27"
-# experiment_name_3 = "5_ant_baseline_40"
-# experiment_name_4 = "static_starting/5_ant_dynamic_1_fitness_tot-reg"
-# experiment_name_5 = "static_starting/5_ant_dynamic_no_gc"
-
-
-# experiment_name_5 = "ant_dynamic_register_clone/5_ant_dynamic_fitness_tot-reg"
-
-# experiment_name_1 = "6_cheetah_baseline_6"
-# experiment_name_2 = "6_cheetah_baseline_17"
-# experiment_name_3 = "6_cheetah_baseline_28"
-# experiment_name_4 = "6_cheetah_dyn_rc_fitness_tot-reg"
-# experiment_name_5 = "6_cheetah_dyn_no_rc_fitness_tot-reg"
-# experiment_name_6 = "6_cheetah_dyn_start_fitness_tot-reg"
-
-
-
-base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../", "tpg", "experiments"))
-print(base_path)
+base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..", "experiments"))
 exp_dir_1 = os.path.join(base_path, experiment_name_1, "logs", "selection")
 exp_dir_2 = os.path.join(base_path, experiment_name_2, "logs", "selection")
 exp_dir_3 = os.path.join(base_path, experiment_name_3, "logs", "selection")
-exp_dir_4 = os.path.join(base_path, experiment_name_4, "logs", "selection")
-exp_dir_5 = os.path.join(base_path, experiment_name_5, "logs", "selection")
+# exp_dir_4 = os.path.join(base_path, experiment_name_4, "logs", "selection")
+# exp_dir_5 = os.path.join(base_path, experiment_name_5, "logs", "selection")
 # exp_dir_6 = os.path.join(base_path, experiment_name_6, "logs", "selection")
 # print(exp_dir_3)
 #best_fitness, validation_fitness, program_instruction_count,effective_program_instruction_count, best_agent_register_size, avg_complexity_front_0
 def load_best_fitness_reps(exp_dir):
     pattern = os.path.join(exp_dir, "selection.*.0.csv")
     files = sorted(glob.glob(pattern))
+    if not files:
+        raise FileNotFoundError(f"No selection logs found matching: {pattern}")
+
     reps = []
     for f in files:
-        # df = pd.read_csv(f, usecols=["validation_fitness"])
+        try:
+            df = pd.read_csv(f, usecols=["validation_fitness"])
+        except pd.errors.EmptyDataError:
+            continue
+        except ValueError as exc:
+            raise ValueError(f"{f} does not contain a validation_fitness column") from exc
 
-        # # Coerce to numeric, then keep only finite, non-zero validation entries.
-        # # We treat each non-zero entry as a "validation generation" and ignore zeros.
-        # vals = pd.to_numeric(df["validation_fitness"], errors="coerce").to_numpy(dtype=float)
-
-
-        df = pd.read_csv(
-            f,
-            usecols=[
-                "validation_fitness",
-                "best_agent_effective_register_size",
-                "best_agent_register_size",
-            ],
-        )
-
-        validation_vals = pd.to_numeric(df["validation_fitness"], errors="coerce").to_numpy(dtype=float)
-        eff_regs = pd.to_numeric(df["best_agent_effective_register_size"], errors="coerce").to_numpy(dtype=float)
-        total_regs = pd.to_numeric(df["best_agent_register_size"], errors="coerce").to_numpy(dtype=float)
-
-        # vals = np.divide(
-        #     eff_regs,
-        #     total_regs,
-        #     out=np.full_like(eff_regs, np.nan, dtype=float),
-        #     where=total_regs != 0,
-        # )
-
-        vals = df["validation_fitness"].values
-
-        mask = np.isfinite(validation_vals) & (validation_vals != 0.0) & np.isfinite(vals)
-        vals = vals[mask]
+        # Validation is logged only when it is performed; zero entries are
+        # placeholders and should not count as validation observations.
+        vals = pd.to_numeric(df["validation_fitness"], errors="coerce").to_numpy(dtype=float)
+        vals = vals[np.isfinite(vals) & (vals != 0.0)]
 
         # Skip seeds that contain no usable values.
         if vals.size == 0:
             continue
 
-        # Truncate if a hard cap is desired.
-        if vals.size > generations:
-            vals = vals[:generations]
+        # Keep validation observations only through the requested generation.
+        max_validation_points = generations // validation_interval
+        vals = vals[:max_validation_points]
 
         reps.append(vals)
     if not reps:
-        return None
-    # Seeds may have different numbers of validation entries after removing zeros.
-    # Align by validation index and pad with NaN so we can compute robust stats.
-    max_len = max(len(r) for r in reps)
+        raise ValueError(f"No usable validation_fitness values found in: {pattern}")
+    # Align runs by validation index, but express the x-axis in regular
+    # generation units. Each validation observation represents 100 generations.
+    max_len = max(len(vals) for vals in reps)
     data = np.full((len(reps), max_len), np.nan, dtype=float)
-    for i, r in enumerate(reps):
-        data[i, :len(r)] = r
+    for i, vals in enumerate(reps):
+        data[i, :len(vals)] = vals
 
-    gens = np.arange(max_len)  # counts non-zero validations as "generations"
-
+    # The first non-zero validation is recorded at generation 100.
+    gens = np.arange(1, max_len + 1) * validation_interval
     medians = np.nanmean(data, axis=0)
     q25 = np.nanpercentile(data, 25, axis=0)
     q75 = np.nanpercentile(data, 75, axis=0)
@@ -120,33 +72,37 @@ def load_best_fitness_reps(exp_dir):
 
 def AddToPlot(gens, median, q25, q75, label, color=None):
     ax = plt.gca()
-    if color is None:
-        color = next(ax._get_lines.prop_cycler)['color']
-    ax.fill_between(gens, q25, q75, alpha=0.15, color=color, zorder=1)
-    ax.plot(gens, median, label=label, linewidth=2.0, color=color, zorder=2)
+    line, = ax.plot(gens, median, label=label, linewidth=2.0, color=color, zorder=2)
+    line_color = line.get_color()
+    ax.fill_between(gens, q25, q75, alpha=0.10, color=line_color, zorder=1)
 
 if __name__ == "__main__":
-    gens1, med1, q25_1, q75_1 = load_best_fitness_reps(exp_dir_1)
-    gens2, med2, q25_2, q75_2 = load_best_fitness_reps(exp_dir_2)
-    gens3, med3, q25_3, q75_3 = load_best_fitness_reps(exp_dir_3)
-    gens4, med4, q25_4, q75_4 = load_best_fitness_reps(exp_dir_4)
-    gens5, med5, q25_5, q75_5 = load_best_fitness_reps(exp_dir_5)
-    # gens6, med6, q25_6, q75_6 = load_best_fitness_reps(exp_dir_6)
+    result1 = load_best_fitness_reps(exp_dir_1)
+    result2 = load_best_fitness_reps(exp_dir_2)
+    result3 = load_best_fitness_reps(exp_dir_3)
+    # result4 = load_best_fitness_reps(exp_dir_4)
+    # result5 = load_best_fitness_reps(exp_dir_5)
+
+    gens1, med1, q25_1, q75_1 = result1
+    gens2, med2, q25_2, q75_2 = result2
+    gens3, med3, q25_3, q75_3 = result3
+    # gens4, med4, q25_4, q75_4 = result4
+    # gens5, med5, q25_5, q75_5 = result5
 
     plt.figure(figsize=(6,4))
-    AddToPlot(gens1, med1, q25_1, q75_1, "Static-Low", color='tab:green')
-    AddToPlot(gens2, med2, q25_2, q75_2, "Static-Medium", color='tab:blue')
-    AddToPlot(gens3, med3, q25_3, q75_3, "Static-High", color='tab:orange')
-    AddToPlot(gens4, med4, q25_4, q75_4, "Dynamic-RD", color='tab:red')
-    AddToPlot(gens5, med5, q25_5, q75_5, "Dynamic", color='teal')
-    # AddToPlot(gens6, med6, q25_6, q75_6, "No RC", color='teal')
+    AddToPlot(gens1, med1, q25_1, q75_1, "Modified Rates", color='tab:green')
+    AddToPlot(gens2, med2, q25_2, q75_2, "Fixed Rates", color='tab:blue')
+    AddToPlot(gens3, med3, q25_3, q75_3, "Inherited Rates", color='tab:orange')
+    # AddToPlot(gens4, med4, q25_4, q75_4, "BALDWIN", color='tab:red')
+    # AddToPlot(gens5, med5, q25_5, q75_5, "Memory with Reward Difference", color='teal')
     
     ax = plt.gca()
+    ax.set_xlim(0, generations)
     ax.grid(which="both", color="lightgray", linewidth=0.5, alpha=0.6)
 
     leg = plt.legend(
     fontsize=14,
-    # loc="lower right",
+    loc="upper left",
     frameon=True,          # ensure the frame is drawn
     fancybox=False
     )
