@@ -72,7 +72,6 @@ program_parameters:
   p_instructions_swap: 0.1  # Probability of swapping the position of two instructions
   p_instructions_delete: 0.1  # Probability of deleting an instruction
   p_instructions_add: 0.1  # Probability of adding an instruction
-  p_instructions_redundancy: 0.01  # Fixed rate or initial S6 adjacent-duplication probability
   n_mutation_passes: 1  # Number of stacked mutation passes per selected program
   self_modifying: 0  # Enable S2-S6 mutation-rate readout and S7 decoy
   evolve_self_modifying_constants: 0  # Evolve inherited S2-S7 constants when enabled

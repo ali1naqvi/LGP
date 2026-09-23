@@ -1110,7 +1110,9 @@ std::array<double, 5> RegisterMachine::MutationProbabilities(
          p_delete = SelfModifyingRawTendencyToProbability(rate_values[1]);
          p_add = SelfModifyingRawTendencyToProbability(rate_values[2]);
          p_mutate = SelfModifyingRawTendencyToProbability(rate_values[3]);
-         p_redundancy = SelfModifyingRawTendencyToProbability(rate_values[4]);
+         p_redundancy = redundancy_rate == params.end()
+             ? 0.0
+             : SelfModifyingRawTendencyToProbability(rate_values[4]);
       }
       return {p_swap, p_delete, p_add, p_mutate, p_redundancy};
 }

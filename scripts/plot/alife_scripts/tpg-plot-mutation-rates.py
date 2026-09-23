@@ -195,8 +195,8 @@ def plot_rates(experiment, max_generation, output, scope):
             ax.plot(generations, median, color=color, linewidth=1.7, label=label)
             ax.fill_between(
                 generations,
-                np.clip(median - std, 0.0, 1.0),
-                np.clip(median + std, 0.0, 1.0),
+                median - std,
+                median + std,
                 color=color,
                 alpha=0.14,
                 linewidth=0,
@@ -204,7 +204,7 @@ def plot_rates(experiment, max_generation, output, scope):
 
         ax.set_title(title, fontsize=11)
         ax.set_xlim(0, max_generation)
-        ax.set_ylim(0, 1)
+        ax.margins(y=0.05)
         ax.grid(color="0.88", linewidth=0.6)
         ax.spines[["top", "right"]].set_visible(False)
         ax.tick_params(labelsize=9)
