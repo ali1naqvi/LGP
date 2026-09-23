@@ -303,3 +303,12 @@ double SelectionMetricsBuilder::get_validation_register_efficiency_spearman() co
 int SelectionMetricsBuilder::get_validation_register_efficiency_n() const {
     return validation_register_efficiency_n;
 }
+
+SelectionMetricsBuilder& SelectionMetricsBuilder::with_self_modification_only_instruction_count(int count) {
+    self_modification_only_instruction_count = count;
+    return *this;
+}
+
+int SelectionMetricsBuilder::get_self_modification_only_instruction_count() const {
+    return self_modification_only_instruction_count;
+}

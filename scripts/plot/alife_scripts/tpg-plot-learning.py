@@ -1,113 +1,93 @@
+"""Plot total and effective instruction counts from selection logs."""
+
+import glob
+import os
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-plt.style.use("seaborn-v0_8-whitegrid")  # clean grid‑based style
-import os
-import glob
 
-generations = 2000
+plt.style.use("seaborn-v0_8-whitegrid")
 
-experiment_name_1 = "pendulum_execution_modified_rates"
-experiment_name_2 = "pendulum_fixed_rates"
-experiment_name_3 = "pendulum_inherited_rates"
-# experiment_name_4 = "gradient_test_baldwin"
-# experiment_name_5 = "gradient_test_10k"
+GENERATIONS = 2000
+BASE_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "../../..", "experiments")
+)
+EXPERIMENTS = (
+    ("pendulum_execution_modified_rates", "Modified Rates", "tab:green"),
+    ("pendulum_fixed_rates", "Fixed Rates", "tab:blue"),
+    ("pendulum_inherited_rates", "Inherited Rates", "tab:orange"),
+)
+TOTAL = "program_instruction_count"
+EFFECTIVE = "effective_program_instruction_count"
 
-base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..", "experiments"))
-exp_dir_1 = os.path.join(base_path, experiment_name_1, "logs", "selection")
-exp_dir_2 = os.path.join(base_path, experiment_name_2, "logs", "selection")
-exp_dir_3 = os.path.join(base_path, experiment_name_3, "logs", "selection")
-# exp_dir_4 = os.path.join(base_path, experiment_name_4, "logs", "selection")
-# exp_dir_5 = os.path.join(base_path, experiment_name_5, "logs", "selection")
-# exp_dir_6 = os.path.join(base_path, experiment_name_6, "logs", "selection")
-# print(exp_dir_3)
-#best_fitness, validation_fitness, program_instruction_count,effective_program_instruction_count, best_agent_register_size, avg_complexity_front_0
-def load_best_fitness_reps(exp_dir):
-    pattern = os.path.join(exp_dir, "selection.*.0.csv")
+
+def load_instruction_reps(experiment):
+    pattern = os.path.join(BASE_PATH, experiment, "logs", "selection", "selection.*.0.csv")
     files = sorted(glob.glob(pattern))
     if not files:
         raise FileNotFoundError(f"No selection logs found matching: {pattern}")
-    reps = []
-    for f in files:
+
+    reps = {TOTAL: [], EFFECTIVE: []}
+    for path in files:
         try:
-            df = pd.read_csv(f, usecols=["effective_program_instruction_count"])
+            df = pd.read_csv(path, usecols=[TOTAL, EFFECTIVE])
         except pd.errors.EmptyDataError:
             continue
-        vals = df["effective_program_instruction_count"].values
-        
-        # df = pd.read_csv(f, usecols=["best_agent_effective_register_size"])
-        # df2 = pd.read_csv(f, usecols=["best_agent_register_size"])
-        # vals = df["best_agent_effective_register_size"].values / df2["best_agent_register_size"].values 
-
-        # df = pd.read_csv(f, usecols=["effective_program_instruction_count"])
-        # df2 = pd.read_csv(f, usecols=["program_instruction_count"])
-        # vals = df["effective_program_instruction_count"].values / df2["program_instruction_count"].values 
-        
-        if len(vals) == 0:
+        if df.empty:
             continue
-        # Pad or truncate to exactly 250 generations
-        if len(vals) < generations:
-            pad_val = vals[-1]
-            pad = np.full(generations - len(vals), pad_val)
-            vals = np.concatenate([vals, pad])
-        else:
-            vals = vals[:generations]
-        reps.append(vals)
-    if not reps:
-        raise ValueError(f"No data rows found in selection logs matching: {pattern}")
-    data = np.vstack(reps)  # shape: (num_seeds, 250)
-    gens = np.arange(generations)
-    medians = np.mean(data, axis=0)
-    q25 = np.percentile(data, 25, axis=0)
-    q75 = np.percentile(data, 75, axis=0)
-    return gens, medians, q25, q75
+        for column in reps:
+            values = df[column].to_numpy()
+            # Hold the final observation for runs shorter than the plotted range.
+            values = np.pad(values[:GENERATIONS],
+                            (0, max(0, GENERATIONS - len(values))),
+                            mode="edge")
+            reps[column].append(values)
 
-def AddToPlot(gens, median, q25, q75, label, color=None):
-    ax = plt.gca()
-    line, = ax.plot(gens, median, label=label, linewidth=2.0, color=color, zorder=2)
-    line_color = line.get_color()
-    ax.fill_between(gens, q25, q75, alpha=0.10, color=line_color, zorder=1)
+    if not reps[TOTAL]:
+        raise ValueError(f"No data rows found in selection logs matching: {pattern}")
+    return {column: np.vstack(values) for column, values in reps.items()}
+
+
+def plot_summary(ax, data, column, label, color):
+    values = data[column]
+    generations = np.arange(GENERATIONS)
+    mean = np.mean(values, axis=0)
+    q25, q75 = np.percentile(values, [25, 75], axis=0)
+    ax.plot(generations, mean, label=label, linewidth=2, color=color)
+    ax.fill_between(generations, q25, q75, alpha=0.10, color=color)
+
+
+def save_overview(data_by_experiment, column, filename, title):
+    fig, ax = plt.subplots(figsize=(6, 4))
+    for experiment, label, color in EXPERIMENTS:
+        plot_summary(ax, data_by_experiment[experiment], column, label, color)
+    ax.set(xlabel="Generation", ylabel="Instruction count", title=title)
+    ax.legend(fontsize=11, frameon=True)
+    fig.savefig(filename, format="pdf", bbox_inches="tight")
+    plt.close(fig)
+
+
+def save_comparison(data_by_experiment):
+    fig, axes = plt.subplots(3, 1, figsize=(7, 9), sharex=True)
+    for ax, (experiment, label, color) in zip(axes, EXPERIMENTS):
+        data = data_by_experiment[experiment]
+        plot_summary(ax, data, TOTAL, "Total", "tab:gray")
+        plot_summary(ax, data, EFFECTIVE, "Effective", color)
+        ax.set(title=label, ylabel="Instruction count")
+        ax.legend(loc="upper left", frameon=True)
+    axes[-1].set_xlabel("Generation")
+    fig.tight_layout()
+    fig.savefig("instruction_counts_comparison.pdf", format="pdf", bbox_inches="tight")
+    plt.close(fig)
+
 
 if __name__ == "__main__":
-    result1 = load_best_fitness_reps(exp_dir_1)
-    result2 = load_best_fitness_reps(exp_dir_2)
-    result3 = load_best_fitness_reps(exp_dir_3)
-    # result4 = load_best_fitness_reps(exp_dir_4)
-    # result5 = load_best_fitness_reps(exp_dir_5)
-    # result6 = load_best_fitness_reps(exp_dir_6)
-
-    gens1, med1, q25_1, q75_1 = result1
-    gens2, med2, q25_2, q75_2 = result2
-    gens3, med3, q25_3, q75_3 = result3
-    # gens4, med4, q25_4, q75_4 = result4
-    # gens5, med5, q25_5, q75_5 = result5
-    # gens6, med6, q25_6, q75_6 = result6
-
-    plt.figure(figsize=(6,4))
-
-    AddToPlot(gens1, med1, q25_1, q75_1, "Modified Rates", color='tab:green')
-    AddToPlot(gens2, med2, q25_2, q75_2, "Fixed Rates", color='tab:blue')
-    AddToPlot(gens3, med3, q25_3, q75_3, "Inherited Rates", color='tab:orange')
-    # AddToPlot(gens4, med4, q25_4, q75_4, "BALDWIN", color='tab:red')
-    # AddToPlot(gens5, med5, q25_5, q75_5, "Memory with Reward Difference", color='teal')
-    # AddToPlot(gens6, med6, q25_6, q75_6, "No RC", color='teal')
-    
-    ax = plt.gca()
-    ax.grid(which="both", color="lightgray", linewidth=0.5, alpha=0.6)
-
-    leg = plt.legend(
-    fontsize=16,
-    # loc="lower right",
-    frameon=True,          # ensure the frame is drawn
-    fancybox=False
-    )
-    frame = leg.get_frame()
-    frame.set_facecolor("white")
-    frame.set_alpha(1.0)       # fully opaque
-    leg.set_zorder(100)        # draw above lines
-            #    , bbox_to_anchor=(1.015, 0.35))
-
-    plt.xticks(fontsize=16)
-    plt.yticks(fontsize=16)
-
-    plt.savefig("effective_total_instructions.pdf", format="pdf", bbox_inches="tight")
+    data_by_experiment = {
+        experiment: load_instruction_reps(experiment)
+        for experiment, _, _ in EXPERIMENTS
+    }
+    save_overview(data_by_experiment, TOTAL, "total_instructions.pdf", "Total instructions")
+    save_overview(data_by_experiment, EFFECTIVE, "effective_total_instructions.pdf",
+                  "Effective instructions")
+    save_comparison(data_by_experiment)

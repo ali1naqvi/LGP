@@ -72,3 +72,11 @@ target_link_libraries(libfastsim PUBLIC Boost::boost)
 
 add_subdirectory(src)
 # add_subdirectory(tests)
+
+option(TPG_BUILD_TESTS "Build core regression tests" OFF)
+if(TPG_BUILD_TESTS)
+  enable_testing()
+  add_executable(self_modification_metrics_test tests/self_modification_metrics.cc)
+  target_link_libraries(self_modification_metrics_test PRIVATE engine)
+  add_test(NAME self_modification_metrics COMMAND self_modification_metrics_test)
+endif()

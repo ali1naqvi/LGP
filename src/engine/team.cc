@@ -311,7 +311,8 @@ int team::policyFeatures(map<long, team*>& teamMap,
 void team::policyInstructions(
     map<long, team*>& teamMap, set<team*, teamIdComp>& visitedTeams,
     vector<int>& RegisterMachineInstructionCounts,
-    vector<int>& effectiveProgramInstructionCounts) const {
+    vector<int>& effectiveProgramInstructionCounts,
+    vector<int>* selfModificationOnlyCounts) const {
    visitedTeams.insert(teamMap[id_]);
 
    for (auto prog : members_) {
@@ -319,13 +320,17 @@ void team::policyInstructions(
           static_cast<int>(prog->instructions_.size()));
       effectiveProgramInstructionCounts.push_back(
           static_cast<int>(prog->instructions_effective_.size()));
+      if (selfModificationOnlyCounts) {
+         selfModificationOnlyCounts->push_back(
+             prog->n_self_modification_only_instructions_);
+      }
 
       if (prog->action_ >= 0 &&
           find(visitedTeams.begin(), visitedTeams.end(),
                teamMap[prog->action_]) == visitedTeams.end())
          teamMap[prog->action_]->policyInstructions(
              teamMap, visitedTeams, RegisterMachineInstructionCounts,
-             effectiveProgramInstructionCounts);
+             effectiveProgramInstructionCounts, selfModificationOnlyCounts);
    }
 }
 

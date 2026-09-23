@@ -144,7 +144,8 @@ class team {
       bool) const;  // populates last set with features and returns number of
                     // nodes(RegisterMachines) in policy
   void policyInstructions(map<long, team *> &, set<team *, teamIdComp> &,
-                          vector<int> &, vector<int> &) const;
+                          vector<int> &, vector<int> &,
+                          vector<int>* selfModificationOnlyCounts = nullptr) const;
   void RemoveProgram(RegisterMachine *prog);
   bool RemoveRandomProgram(mt19937 &rng);
   void resetOutcomes(int); /* Delete all outcomes from phase. */

@@ -17,6 +17,7 @@ struct SelectionMetrics {
     const double fitness_value_for_selection;
     const int program_instruction_count;
     const int effective_program_instruction_count;
+    const int self_modification_only_instruction_count;
     const double best_agent_register_size;
     const double best_agent_effective_register_size;
     const double best_agent_flops;

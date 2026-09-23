@@ -3014,10 +3014,11 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
 
          visitedTeams.clear();
          vector<int> programInstructionCounts,
-             effectiveProgramInstructionCounts;
+             effectiveProgramInstructionCounts, selfModificationOnlyCounts;
          (*teiter)->policyInstructions(team_map_, visitedTeams,
                                        programInstructionCounts,
-                                       effectiveProgramInstructionCounts);
+                                       effectiveProgramInstructionCounts,
+                                       &selfModificationOnlyCounts);
 
          oss << " pIns "
              << accumulate(programInstructionCounts.begin(),
@@ -3378,6 +3379,8 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
                                                               programInstructionCounts.end(), 0))
                    .with_total_effective_program_instructions(accumulate(effectiveProgramInstructionCounts.begin(),
                                                                         effectiveProgramInstructionCounts.end(), 0))
+                   .with_self_modification_only_instruction_count(accumulate(
+                       selfModificationOnlyCounts.begin(), selfModificationOnlyCounts.end(), 0))
                    .with_best_agent_register_size(best_agent_register_size)
                    .with_best_agent_effective_register_size(best_agent_effective_register_size)
                    .with_best_agent_flops(best_agent ? TPG::ComputeTeamFLOPs(best_agent) : 0.0)

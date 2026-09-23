@@ -158,6 +158,23 @@ mj_n_eval_validation: <nonzero>
 
 ### 5. Plot results
 
+New selection CSVs include `self_modification_only_instruction_count`: the
+number of effective instructions retained exclusively for mutation-rate outputs
+(S2–S6), including their dependencies. Instructions also needed for bid/action
+outputs remain in the action count, and the S7 decoy is excluded. The metric is
+zero when self-modification is disabled. Existing effective counts are unchanged.
+Subtract it from `effective_program_instruction_count` to obtain the effective
+instruction count for bid/action outputs. Both counts use the same policy traversal.
+Older CSVs do not contain this metric.
+
+Core regression checks can be run with:
+
+```sh
+cmake -S . -B build/metrics -DTPG_BUILD_EXPERIMENTS=OFF -DTPG_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build/metrics --target self_modification_metrics_test
+ctest --test-dir build/metrics --output-on-failure
+```
+
 Generate classic_control_p0.pdf with various statistics:
 
 ```

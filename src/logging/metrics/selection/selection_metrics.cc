@@ -11,6 +11,7 @@ SelectionMetrics::SelectionMetrics(const SelectionMetricsBuilder& builder)
       fitness_value_for_selection(builder.get_fitness_value_for_selection()),
       program_instruction_count(builder.get_total_program_instructions()),
       effective_program_instruction_count(builder.get_total_effective_program_instructions()),
+      self_modification_only_instruction_count(builder.get_self_modification_only_instruction_count()),
       best_agent_register_size(builder.get_best_agent_register_size()),
       best_agent_effective_register_size(builder.get_best_agent_effective_register_size()),
       best_agent_flops(builder.get_best_agent_flops()),

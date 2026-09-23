@@ -6,6 +6,8 @@
 
 class SelectionMetricsBuilder {
 public:
+    SelectionMetricsBuilder& with_self_modification_only_instruction_count(int count);
+    int get_self_modification_only_instruction_count() const;
     SelectionMetricsBuilder& with_generation(long generation);
     SelectionMetricsBuilder& with_best_fitness(double best_fitness);
     SelectionMetricsBuilder& with_validation_fitness(double validation_fitness);
@@ -92,6 +94,7 @@ public:
     SelectionMetrics build() const;
 
 private:
+    int self_modification_only_instruction_count = 0;
     long team_id = 0;
     long generation = 0;
     double best_fitness = 0.0;

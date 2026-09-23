@@ -33,6 +33,8 @@ class RegisterMachine {
    std::vector<instruction *> instructions_effective_;
    vector<int> op_counts_;  // Count each op in instructions_effective_
    int n_effective_registers_ = 0;
+   // Extra effective instructions retained exclusively by mutation-rate roots.
+   int n_self_modification_only_instructions_ = 0;
 
    void MutateRegisterStatefulFlags(mt19937 &rng);
    void ChangeStatefulFlag();

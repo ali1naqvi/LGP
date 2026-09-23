@@ -847,6 +847,8 @@ void RegisterMachine::MarkIntrons(
          memories_effective[MemoryEigen::kMatrixType_][1] = true;
    }
 
+   auto action_memories_effective = memories_effective;
+
    // Mutation-rate outputs are part of the program phenotype. Without this,
    // intron removal drops instructions that only write S2-S6 and the inherited
    // self-modifying rates remain fixed at their initial values.
@@ -863,67 +865,83 @@ void RegisterMachine::MarkIntrons(
       }
    }
 
-   // Backward pass to find effective instructions when stateless
-   std::vector<instruction*> instructions_effective_stateless;
-   for (auto riter = instructions_.rbegin(); riter != instructions_.rend();
-        riter++) {
-      auto istr = *riter;
-      const bool writes_decoy = SelfModifyingEnabled(params) &&
-          IsSelfModifyingDecoyAccess(istr->GetOutType(), istr->outIdx_,
-                                     n_memories);
-      if (!writes_decoy &&
-          memories_effective[istr->GetOutType()][istr->outIdx_ % n_memories]) {
-         instructions_effective_stateless.push_back(istr);
-         for (int in = 0; in < 2; in++) {
-            if (istr->IsMemoryRef(in) && !istr->IsConstRef(in)) {
-               int t   = istr->GetInType(in);
-               int idx = istr->GetInIdx(in) % n_memories;
-               if (SelfModifyingEnabled(params) &&
-                   IsSelfModifyingDecoyAccess(t, istr->GetInIdx(in),
-                                              n_memories)) {
-                  continue;
-               }
-               // Only allow Matrix inputs to propagate if they are M0.
-               if (t != MemoryEigen::kMatrixType_ || idx == 0) {
-                  memories_effective[t][idx] = true;
-               }
-            }
-         }
-      }
-   }
-
-   // TODO(skelly): Is this the most efficient method? Currently O(n^2)
-   for (size_t t = 0; t < instructions_.size(); t++) {
-      instructions_effective_.clear();
-      // Count occurance of each op.
-      std::fill(op_counts_.begin(), op_counts_.end(), 0);
-      for (auto istr : instructions_) {
+   // Use the same dependency analysis with and without mutation-rate roots.
+   // Keep decoy handling identical, and avoid changing feature metadata during
+   // the action-only analysis.
+   auto find_effective = [&](map<int, vector<bool>> memories_effective,
+                             bool mark_features) {
+      std::vector<instruction*> effective_instructions;
+      // Backward pass to find effective instructions when stateless
+      std::vector<instruction*> effective_instructions_stateless;
+      for (auto riter = instructions_.rbegin(); riter != instructions_.rend();
+           riter++) {
+         auto istr = *riter;
          const bool writes_decoy = SelfModifyingEnabled(params) &&
              IsSelfModifyingDecoyAccess(istr->GetOutType(), istr->outIdx_,
                                         n_memories);
-         if ((!writes_decoy && memories_effective[istr->GetOutType()]
-                                [istr->outIdx_ % n_memories]) ||
-             std::find(instructions_effective_stateless.begin(),
-                       instructions_effective_stateless.end(),
-                       istr) != instructions_effective_stateless.end()) {
-            instructions_effective_.push_back(istr);
-            op_counts_[istr->op_]++;
+         if (!writes_decoy &&
+             memories_effective[istr->GetOutType()][istr->outIdx_ % n_memories]) {
+            effective_instructions_stateless.push_back(istr);
             for (int in = 0; in < 2; in++) {
                if (istr->IsMemoryRef(in) && !istr->IsConstRef(in)) {
+                  int t   = istr->GetInType(in);
+                  int idx = istr->GetInIdx(in) % n_memories;
                   if (SelfModifyingEnabled(params) &&
-                      IsSelfModifyingDecoyAccess(istr->GetInType(in),
-                                                 istr->GetInIdx(in),
+                      IsSelfModifyingDecoyAccess(t, istr->GetInIdx(in),
                                                  n_memories)) {
                      continue;
                   }
-                  memories_effective[istr->GetInType(in)]
-                                    [istr->GetInIdx(in) % n_memories] = true;
-               } else if (istr->IsObs(in)) {
-                  MarkFeatures(istr, in);
+                  // Only allow Matrix inputs to propagate if they are M0.
+                  if (t != MemoryEigen::kMatrixType_ || idx == 0) {
+                     memories_effective[t][idx] = true;
+                  }
                }
             }
          }
       }
+
+      // TODO(skelly): Is this the most efficient method? Currently O(n^2)
+      for (size_t t = 0; t < instructions_.size(); t++) {
+         effective_instructions.clear();
+         for (auto istr : instructions_) {
+            const bool writes_decoy = SelfModifyingEnabled(params) &&
+                IsSelfModifyingDecoyAccess(istr->GetOutType(), istr->outIdx_,
+                                           n_memories);
+            if ((!writes_decoy && memories_effective[istr->GetOutType()]
+                                   [istr->outIdx_ % n_memories]) ||
+                std::find(effective_instructions_stateless.begin(),
+                          effective_instructions_stateless.end(),
+                          istr) != effective_instructions_stateless.end()) {
+               effective_instructions.push_back(istr);
+               for (int in = 0; in < 2; in++) {
+                  if (istr->IsMemoryRef(in) && !istr->IsConstRef(in)) {
+                     if (SelfModifyingEnabled(params) &&
+                         IsSelfModifyingDecoyAccess(istr->GetInType(in),
+                                                    istr->GetInIdx(in),
+                                                    n_memories)) {
+                        continue;
+                     }
+                     memories_effective[istr->GetInType(in)]
+                                       [istr->GetInIdx(in) % n_memories] = true;
+                  } else if (mark_features && istr->IsObs(in)) {
+                     MarkFeatures(istr, in);
+                  }
+               }
+            }
+         }
+      }
+      return effective_instructions;
+   };
+   instructions_effective_ = find_effective(memories_effective, true);
+   std::fill(op_counts_.begin(), op_counts_.end(), 0);
+   for (auto* istr : instructions_effective_) op_counts_[istr->op_]++;
+
+   n_self_modification_only_instructions_ = 0;
+   if (SelfModifyingEnabled(params)) {
+      const auto action_instructions = find_effective(action_memories_effective, false);
+      n_self_modification_only_instructions_ =
+          static_cast<int>(instructions_effective_.size()) -
+          static_cast<int>(action_instructions.size());
    }
    map<int, vector<bool>> regs_used;
    regs_used[MemoryEigen::kScalarType_] = vector<bool>(n_memories, false);

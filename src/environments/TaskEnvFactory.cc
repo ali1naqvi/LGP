@@ -34,7 +34,17 @@ TaskEnv* TaskEnvFactory::createTask(const std::string& name, std::unordered_map<
                                 value("pendulum_n_eval_test", 100));
         }},
         {"MountainCar", [](std::unordered_map<std::string, std::any>&) { return new MountainCar(); }},
-        {"MountainCarContinuous", [](std::unordered_map<std::string, std::any>&) { return new MountainCarContinuous(); }},
+        {"MountainCarContinuous", [](std::unordered_map<std::string, std::any>& params) {
+            auto value = [&params](const char* key, int fallback) {
+                auto it = params.find(key);
+                return it == params.end() ? fallback : std::any_cast<int>(it->second);
+            };
+            return new MountainCarContinuous(
+                value("mountaincar_continuous_max_timesteps", 200),
+                value("mountaincar_continuous_n_eval_train", 20),
+                value("mountaincar_continuous_n_eval_validation", 0),
+                value("mountaincar_continuous_n_eval_test", 100));
+        }},
         {"Sunspots", [](std::unordered_map<std::string, std::any>&) { return new RecursiveForecast("Sunspots"); }},
         {"Mackey", [](std::unordered_map<std::string, std::any>&) { return new RecursiveForecast("Mackey"); }},
         {"Laser", [](std::unordered_map<std::string, std::any>&) { return new RecursiveForecast("Laser"); }},

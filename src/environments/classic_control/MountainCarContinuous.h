@@ -44,13 +44,14 @@ class MountainCarContinuous : public ClassicControlEnv {
     double MaxActionContinuous() const override { return kMaxAction; }
     double MinActionContinuous() const override { return kMinAction; }
 
-    MountainCarContinuous() {
-        n_eval_train_ = 20;
-        n_eval_validation_ = 0;
-        n_eval_test_ = 100;
+    MountainCarContinuous(int max_timesteps = 200, int n_eval_train = 20,
+                          int n_eval_validation = 0, int n_eval_test = 100) {
+        n_eval_train_ = n_eval_train;
+        n_eval_validation_ = n_eval_validation;
+        n_eval_test_ = n_eval_test;
         dis_reset = std::uniform_real_distribution<>(-0.6, -0.4);
         eval_type_ = "Control";
-        max_step_ = 200;
+        max_step_ = max_timesteps;
         state_.reserve(kMountainCarContinuousStateSize);
         state_.resize(kMountainCarContinuousStateSize);
         state_po_.reserve(kMountainCarContinuousStateSize);
