@@ -93,7 +93,7 @@ program_parameters:
   min_prog_size: 1
   min_initial_prog_size: 1
   max_initial_prog_size: 25  # Max initial program size
-  max_prog_size: 200  # Max program size
+  max_prog_size: 500000  # Max program size
 
   memory_size: 1  # Dimensionality for vector & matrix memory
   min_memory_size: 1  # Minimum memory size
