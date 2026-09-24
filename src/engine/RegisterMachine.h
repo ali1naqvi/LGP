@@ -21,7 +21,7 @@ class RegisterMachine {
    bool coordination_allowed = false;
    bool matrix_modulation = false;
    bool operations_additive_ = false;
-   bool self_modifying_ = false;     // Reserves S2-S6 for rates and isolates neutral S7
+   bool self_modifying_ = false;     // Reserves S2-S5 for rates and isolates neutral S6
    int obs_index_ = 0;              // Mutable: index into observation space
    int observation_buff_size_ = 1;  // Mutable: observation buff size
    int n_memories_ = 1; // Mutable: memory slots 
@@ -150,7 +150,7 @@ class RegisterMachine {
    }
 
    // Reset ordinary stateless registers at an episode boundary while retaining
-   // the self-modifying rate phenotype in S2-S6 and its neutral S7 control.
+   // the self-modifying rate phenotype in S2-S5 and its neutral S6 control.
    void CopyPrivateConstToWorkingMemoryPreservingSelfModifyingRegisters();
    
    void UpdateActivationMatrix(auto ins);
@@ -180,7 +180,7 @@ class RegisterMachine {
                std::unordered_map<std::string, int> &state, mt19937 &rng,
                std::vector<bool> &legal_ops);
 
-   std::array<double, 5> MutationProbabilities(
+   std::array<double, kSelfModifyingRegisterCount> MutationProbabilities(
        const std::unordered_map<std::string, std::any>& params) const;
 
    void MutateMemorySize(std::unordered_map<std::string, std::any> &params,

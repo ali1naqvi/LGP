@@ -128,12 +128,12 @@ inline double sigmoid(double x, double m) { return 1 / (1 + exp(-(m * x))); }
 inline double sigmoid(double x) { return 1 / (1 + exp(-x)); }
 
 // Scalar register layout for self-modifying programs:
-// S0 = bid, S1 = action, S2-S6 = swap/delete/add/point-mutation/redundancy
-// rates, S7 = decoy.
+// S0 = bid, S1 = action, S2-S5 = swap/delete/add/point-mutation
+// rates, S6 = decoy.
 constexpr size_t kBidRegister = 0;
 constexpr size_t kActionRegister = 1;
 constexpr size_t kSelfModifyingFirstRegister = 2;
-constexpr size_t kSelfModifyingRegisterCount = 5;
+constexpr size_t kSelfModifyingRegisterCount = 4;
 constexpr size_t kSelfModifyingRequiredRegisterCount =
     kSelfModifyingFirstRegister + kSelfModifyingRegisterCount;
 constexpr size_t kSelfModifyingDecoyRegister = kSelfModifyingRequiredRegisterCount;
@@ -144,12 +144,12 @@ inline bool IsSelfModifyingRateRegister(int idx) {
           idx < static_cast<int>(kSelfModifyingRequiredRegisterCount);
 }
 
-// Self-modifying programs store mutation-rate tendencies as raw values in S2-S6.
+// Self-modifying programs store mutation-rate tendencies as raw values in S2-S5.
 // Mutation and logging consume a bounded probability readout from these values.
 constexpr double kSelfModifyingProbabilityEpsilon = 1e-6;
 constexpr double kSelfModifyingRateTemperature = 1.0;
 constexpr double kSelfModifyingBoundaryRaw = 20.0;
-// Gaussian step size applied in probability space when evolving S2-S6 constants.
+// Gaussian step size applied in probability space when evolving S2-S5 constants.
 constexpr double kSelfModifyingRateProbabilityMutationStdDev = 0.02;
 
 inline double ClampSelfModifyingProbability(double value) {

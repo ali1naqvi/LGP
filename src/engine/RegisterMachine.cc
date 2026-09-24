@@ -183,6 +183,7 @@ std::string RegisterMachine::ToString(bool effective_only) {
       }
    }
    oss << ":SM" << (self_modifying_ ? 1 : 0);
+   oss << ":SL4"; // Four mutation rates; S6 is the decoy.
    // for (auto &i : private_memory_ids_) oss << ":" << i;
    auto prog = effective_only ? instructions_effective_ : instructions_;
    for (auto istr : prog) oss << ":" << istr->ToString();
@@ -683,6 +684,15 @@ RegisterMachine::RegisterMachine(
       ++f;
    }
 
+   const bool current_layout = f < static_cast<int>(outcomeFields.size()) &&
+                               outcomeFields[f] == "SL4";
+   if (current_layout) ++f;
+   if (self_modifying_ && !current_layout) {
+      throw std::runtime_error(
+          "Legacy self-modifying checkpoint has the removed redundancy layout. "
+          "Start a fresh experiment; this checkpoint cannot be resumed or replayed.");
+   }
+
    // SetupMemry() but from existing memory pointers
    for (size_t mem_t = 0; mem_t < MemoryEigen::kNumMemoryType_; mem_t++) {
       private_memory_.push_back(memory_maps[mem_t][id_]);
@@ -767,7 +777,7 @@ RegisterMachine::RegisterMachine(
    instructions_effective_ = instructions_;
    op_counts_.resize(instruction::NUM_OP);
    from_string_ = true;
-   // Checkpoints already contain evolved S2-S6 constants. New checkpoints
+   // Checkpoints already contain evolved S2-S5 constants. New checkpoints
    // store the per-program variant; old checkpoints retain the global setting.
    auto program_params = params;
    program_params["self_modifying"] = self_modifying_ ? 1 : 0;
@@ -850,7 +860,7 @@ void RegisterMachine::MarkIntrons(
    auto action_memories_effective = memories_effective;
 
    // Mutation-rate outputs are part of the program phenotype. Without this,
-   // intron removal drops instructions that only write S2-S6 and the inherited
+   // intron removal drops instructions that only write S2-S5 and the inherited
    // self-modifying rates remain fixed at their initial values.
    if (SelfModifyingEnabled(params)) {
       for (size_t i = 0; i < kSelfModifyingRegisterCount; ++i) {
@@ -1078,7 +1088,7 @@ void RegisterMachine::MutateRegisterStatefulFlags(mt19937 &rng) {
    }
 }
 
-std::array<double, 5> RegisterMachine::MutationProbabilities(
+std::array<double, kSelfModifyingRegisterCount> RegisterMachine::MutationProbabilities(
     const std::unordered_map<std::string, std::any>& params) const {
       double p_swap = std::any_cast<double>(params.at("p_instructions_swap"));
       double p_delete = std::any_cast<double>(params.at("p_instructions_delete"));
@@ -1089,39 +1099,31 @@ std::array<double, 5> RegisterMachine::MutationProbabilities(
       double p_mutate = point_mutation_rate == params.end()
           ? 1.0
           : std::any_cast<double>(point_mutation_rate->second);
-      const auto redundancy_rate = params.find("p_instructions_redundancy");
-      double p_redundancy = redundancy_rate == params.end()
-          ? 0.0
-          : std::any_cast<double>(redundancy_rate->second);
 
       if (SelfModifyingEnabled(params)) {
          auto* scalar_memory = private_memory_[MemoryEigen::kScalarType_];
          if (scalar_memory->n_memories_ < kSelfModifyingMinScalarRegisters) {
             die(__FILE__, __FUNCTION__, __LINE__,
-                "self_modifying requires scalar registers S0-S7.");
+                "self_modifying requires scalar registers S0-S6.");
          }
          const double rate_values[kSelfModifyingRegisterCount] = {
              scalar_memory->working_memory_[kSelfModifyingFirstRegister](0, 0),
              scalar_memory->working_memory_[kSelfModifyingFirstRegister + 1](0, 0),
              scalar_memory->working_memory_[kSelfModifyingFirstRegister + 2](0, 0),
-             scalar_memory->working_memory_[kSelfModifyingFirstRegister + 3](0, 0),
-             scalar_memory->working_memory_[kSelfModifyingFirstRegister + 4](0, 0)};
+             scalar_memory->working_memory_[kSelfModifyingFirstRegister + 3](0, 0)};
          p_swap = SelfModifyingRawTendencyToProbability(rate_values[0]);
          p_delete = SelfModifyingRawTendencyToProbability(rate_values[1]);
          p_add = SelfModifyingRawTendencyToProbability(rate_values[2]);
          p_mutate = SelfModifyingRawTendencyToProbability(rate_values[3]);
-         p_redundancy = redundancy_rate == params.end()
-             ? 0.0
-             : SelfModifyingRawTendencyToProbability(rate_values[4]);
       }
-      return {p_swap, p_delete, p_add, p_mutate, p_redundancy};
+      return {p_swap, p_delete, p_add, p_mutate};
 }
 
 void RegisterMachine::Mutate(std::unordered_map<std::string, std::any> &params,
                              std::unordered_map<std::string, int> &state,
                              mt19937 &rng, vector<bool> &legal_ops) {
    uniform_real_distribution<> dis_real(0, 1.0);
-   const auto [p_swap, p_delete, p_add, p_mutate, p_redundancy] =
+   const auto [p_swap, p_delete, p_add, p_mutate] =
        MutationProbabilities(params);
 
       // Remove random instruction
@@ -1152,7 +1154,7 @@ void RegisterMachine::Mutate(std::unordered_map<std::string, std::any> &params,
                                             observation_buff_size_, rng);
       }
 
-      // Mutate constants. S2-S6/S7 use probability-space mutation; other slots
+      // Mutate constants. S2-S5/S6 use probability-space mutation; other slots
       // use the AutoML-Zero multiplicative rule.
       if (use_evolved_const_ && dis_real(rng) <
           std::any_cast<double>(params["p_memory_mu_const"])) {
@@ -1165,7 +1167,6 @@ void RegisterMachine::Mutate(std::unordered_map<std::string, std::any> &params,
                          kSelfModifyingFirstRegister + 1,
                          kSelfModifyingFirstRegister + 2,
                          kSelfModifyingFirstRegister + 3,
-                         kSelfModifyingFirstRegister + 4,
                          kSelfModifyingDecoyRegister});
             } else {
                memory->MutateConstants(rng);
@@ -1214,17 +1215,6 @@ void RegisterMachine::Mutate(std::unordered_map<std::string, std::any> &params,
          std::swap(instructions_[i], instructions_[j]);
       }
 
-      // Duplicate one instruction immediately after the original.
-      if (!instructions_.empty() &&
-          (int)instructions_.size() <
-              std::any_cast<int>(params["max_prog_size"]) &&
-          dis_real(rng) < p_redundancy) {
-         uniform_int_distribution<int> disBid(0, instructions_.size() - 1);
-         const int i = disBid(rng);
-         instruction *duplicate = new instruction(*instructions_[i]);
-         instructions_.insert(instructions_.begin() + i + 1, duplicate);
-      }
-
       // Change observation buff size
       // if (dis_real(rng) <
       //     std::any_cast<double>(params["p_observation_buff_size"])) {
@@ -1255,7 +1245,7 @@ void RegisterMachine::Mutate(std::unordered_map<std::string, std::any> &params,
          } while (obs_index_ == prev);
       }
 
-      // S7 is a genetic-drift control, not executable memory. Repair any
+      // S6 is a genetic-drift control, not executable memory. Repair any
       // instruction or memory-slot mutation that would make it readable or
       // writable by the program.
       self_modifying_ = SelfModifyingEnabled(params);
@@ -1275,17 +1265,14 @@ void RegisterMachine::ConfigureSelfModifyingRegisters(
    auto* scalar_memory = private_memory_[MemoryEigen::kScalarType_];
    if (scalar_memory->n_memories_ < kSelfModifyingMinScalarRegisters) {
       die(__FILE__, __FUNCTION__, __LINE__,
-          "self_modifying requires scalar registers S0-S7.");
+          "self_modifying requires scalar registers S0-S6.");
    }
 
    const double values[kSelfModifyingRegisterCount] = {
        std::any_cast<double>(params["p_instructions_swap"]),
        std::any_cast<double>(params["p_instructions_delete"]),
        std::any_cast<double>(params["p_instructions_add"]),
-       std::any_cast<double>(params["p_instructions_mutate"]),
-       params.contains("p_instructions_redundancy")
-           ? std::any_cast<double>(params["p_instructions_redundancy"])
-           : 0.0};
+       std::any_cast<double>(params["p_instructions_mutate"])};
 
    for (size_t i = 0; i < kSelfModifyingRegisterCount; ++i) {
       const size_t reg = kSelfModifyingFirstRegister + i;
@@ -1332,7 +1319,7 @@ void RegisterMachine::SeedSelfModifyingWorkingFromConstants(
    auto* scalar_memory = private_memory_[MemoryEigen::kScalarType_];
    if (scalar_memory->n_memories_ < kSelfModifyingMinScalarRegisters) {
       die(__FILE__, __FUNCTION__, __LINE__,
-          "self_modifying requires scalar registers S0-S7.");
+          "self_modifying requires scalar registers S0-S6.");
    }
 
    for (size_t i = 0; i < kSelfModifyingRegisterCount; ++i) {
@@ -1374,7 +1361,7 @@ void RegisterMachine::CopySelfModifyingOutputs(
    if (destination->n_memories_ < kSelfModifyingMinScalarRegisters ||
        source_memory->n_memories_ < kSelfModifyingMinScalarRegisters) {
       die(__FILE__, __FUNCTION__, __LINE__,
-          "self_modifying requires scalar registers S0-S7.");
+          "self_modifying requires scalar registers S0-S6.");
    }
 
    const bool inherit_outputs_as_constants =
@@ -1454,7 +1441,7 @@ void RegisterMachine::Run(EvalData& eval_data, int &time_step, const size_t &gra
    for (auto istr : instructions_effective_) {
       istr->out_ = private_memory_[istr->GetOutType()];
       istr->outIdxE_ = istr->outIdx_ % istr->out_->n_memories_;
-      // Defensive checkpoint compatibility: S7 writes are no-ops even if an
+      // Defensive checkpoint compatibility: S6 writes are no-ops even if an
       // older serialized program still addresses the decoy.
       if (self_modifying_ &&
           IsSelfModifyingDecoyAccess(istr->GetOutType(), istr->outIdx_,
@@ -1785,7 +1772,7 @@ void RegisterMachine::MutateMemorySlots(
    if (self_modifying &&
        max_size < static_cast<int>(kSelfModifyingMinScalarRegisters)) {
       die(__FILE__, __FUNCTION__, __LINE__,
-          "self_modifying requires max_memory_slots to be at least eight.");
+          "self_modifying requires max_memory_slots to be at least seven.");
    }
 
    int old_size = static_cast<int>(private_memory_[MemoryEigen::kScalarType_]->n_memories_);

@@ -34,20 +34,18 @@ SMOOTHING_WINDOW_SAMPLES = max(
 MPI_PROCESSES = 1
 REPLAY_EXECUTABLE = REPO / "build/release/experiments/TPGExperimentMPI"
 
-RATE_NAMES = ("swap", "delete", "add", "mutate", "redundancy")
+RATE_NAMES = ("swap", "delete", "add", "mutate")
 RATE_LABELS = {
     "swap": "Swap",
     "delete": "Delete",
     "add": "Add",
     "mutate": "Point mutation",
-    "redundancy": "Redundancy",
 }
 RATE_COLOURS = {
     "swap": "#0072B2",
     "delete": "#D55E00",
     "add": "#009E73",
     "mutate": "#CC79A7",
-    "redundancy": "#E69F00",
 }
 EPSILON = 1e-6
 

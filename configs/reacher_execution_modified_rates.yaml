@@ -73,9 +73,10 @@ program_parameters:
   p_instructions_delete: 0.1  # Probability of deleting an instruction
   p_instructions_add: 0.1  # Probability of adding an instruction
   n_mutation_passes: 1  # Number of stacked mutation passes per selected program
-  self_modifying: 1  # Enable S2-S6 mutation-rate readout and S7 decoy
-  evolve_self_modifying_constants: 1  # Evolve inherited S2-S7 constants when enabled
+  self_modifying: 1  # Enable S2-S5 mutation-rate readout and S6 decoy
+  evolve_self_modifying_constants: 1  # Evolve inherited S2-S6 constants when enabled
   reset_self_modifying_before_mutation: 0  # 1: inherited constants; 0: parent output rates
+  reset_self_modifying_per_episode: 0  # 1: reset S2-S6 to inherited constants each episode; 0: carry over
   operations_additive: 0  # Make every instruction add its result to the destination register
 
   p_memory_mu_const: 0.25  # Probability of mutating constants
@@ -99,10 +100,10 @@ program_parameters:
   max_memory_size: 2  # Fixed vector/matrix dimension matching the actuator count
 
   gene_clone: 0
-  min_initial_mem_slots: 11
-  max_initial_mem_slots: 11
-  min_memory_slots: 11  # Minimum memory size
-  max_memory_slots: 11  # Maximum memory size (keep bounded to avoid OOM)
+  min_initial_mem_slots: 10
+  max_initial_mem_slots: 10
+  min_memory_slots: 10  # Minimum memory size
+  max_memory_slots: 10  # Maximum memory size (keep bounded to avoid OOM)
   p_hidden_stateful_mutation: 0.00 # Mutate stateful/stateless flags for all registers, including action registers
 
   # Observations are stored in a buffer with this time window
@@ -189,7 +190,7 @@ gradient_parameters:
   gradient_reward_obs: 0 # 1: expose previous-step collected energy (normalised) as an extra obs
   gradient_obs_noise: 0.0     # Std-dev of Gaussian sensory noise on the perceived concentration (0 = noiseless)
   gradient_obs_noise_cue: 0   # 1: expose the current noise level as an extra observation channel
-  lamarkism_evolved_constants: 0  # Inherit final S2-S6 outputs as offspring starting constants
+  lamarkism_evolved_constants: 0  # Inherit final S2-S5 outputs as offspring starting constants
 
   gradient_peak_height: 80.0  # Concentration at the peak
   gradient_spread: 30.0       # Logical distance at which the cone falls to 0

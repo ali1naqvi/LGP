@@ -77,7 +77,7 @@ prey_population:
   self_modifying: 0
 ```
 
-Set `self_modifying` to `1` to enable inherited S2-S6 rate registers and their
+Set `self_modifying` to `1` to enable inherited S2-S5 rate registers and their
 execution-time modification. **The shipped configuration keeps
 `reset_self_modifying_before_mutation: 1`**: encounter outputs persist during
 training, but mutation uses the inherited constants rather than those outputs.
@@ -85,11 +85,11 @@ Setting the reset flag to `0` instead makes mutation consume the final encounter
 outputs. This flag remains global; it is not a per-role setting.
 Set `self_modifying` to `0` to use the fixed
 `p_instructions_swap`, `p_instructions_delete`, `p_instructions_add`, and
-`p_instructions_mutate` and `p_instructions_redundancy` values from
+`p_instructions_mutate` values from
 `program_parameters`. The settings affect
 initial programs, offspring, crossover, and evaluation. New checkpoints store
 the variant on every program so a resumed experiment preserves its original
-population definitions; older checkpoints adopt the current config values.
+population definitions. Legacy self-modifying checkpoints are rejected because their register layout differs.
 
 ## Encounter history and evaluation isolation
 
@@ -108,14 +108,14 @@ uses its existing fixed starting positions; a new encounter seed does not imply
 new starting positions.
 
 The complete phase runs on **one evaluator worker** so stateful policy memory
-and team learning state follow the encounter order, as do S2-S7. Launching more
+and team learning state follow the encounter order, as do S2-S6. Launching more
 MPI ranks does not change the schedule; extra workers remain idle and participate
 in the collectives. This reference implementation sacrifices parallel evaluation
 speed. A future parallel implementation must synchronize the full runtime state,
 not only the mutation registers. At least two MPI processes are required
 (one master, one evaluator).
 
-Live S2-S7 outputs are returned to the master after training and included in
+Live S2-S6 outputs are returned to the master after training and included in
 both MPI and disk checkpoints. Surviving programs therefore keep their rate
 history into the next generation. Offspring start with their inherited constants
 after variation. This does not add persistence of ordinary working memory or
@@ -133,8 +133,8 @@ opponent panel.
 There is no explicit win/loss observation or extra post-terminal policy execution.
 The log associates rate changes with a match result; it does not establish that
 losing caused a change. Both participants advance their execution timestep and
-reward/learning bookkeeping. S6 controls adjacent instruction duplication. S7 is
-the isolated decoy: policy reads and writes are blocked, while inherited S7 can
+reward/learning bookkeeping. S6 is
+the isolated decoy: policy reads and writes are blocked, while inherited S6 can
 evolve through constant mutation.
 
 ## Logs
@@ -146,7 +146,7 @@ Only the master writes these CSVs, avoiding concurrent worker writes:
   encounter ID and seed, episode, team ID, role, opponent ID, candidate/opponent
   appearance, encounter count, program ID, self-modification flag, elapsed steps,
   role reward, capture/timeout result, program/effective lengths, and before/after
-  raw S2-S7 values. Also includes inherited raw values and sigmoid-transformed
+  raw S2-S6 values. Also includes inherited raw values and sigmoid-transformed
   before/after probabilities. Counts restart at each generation/phase and include
   both appearances. For multi-program teams the same team count repeats on its
   program rows. Raw values preserve spikes/non-finite values; transformed values
@@ -156,9 +156,9 @@ Only the master writes these CSVs, avoiding concurrent worker writes:
   per mutation pass. Includes child team/role, parent/child program IDs, reset flag,
   parent encounter outputs (before clone sanitization), inherited values before/after the
   pass, and the five probabilities actually used for
-  swap/delete/add/point-mutation/redundancy.
+  swap/delete/add/point-mutation.
   These are operator probabilities, not a record of which random operators fired.
-  S7 is logged but never controls a mutation operator.
+  S6 is logged but never controls a mutation operator.
 
 CSV files are append-only for a seed/PID pair and flushed at phase boundaries.
 Use distinct run directories or PIDs for independent runs/resume branches.

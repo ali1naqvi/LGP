@@ -99,10 +99,10 @@ program_parameters:
   max_memory_size: 1  # Maximum memory size
 
   gene_clone: 0
-  min_initial_mem_slots: 8
-  max_initial_mem_slots: 8
-  min_memory_slots: 8  # Minimum memory size
-  max_memory_slots: 8  # Maximum memory size (keep bounded to avoid OOM)
+  min_initial_mem_slots: 7
+  max_initial_mem_slots: 7
+  min_memory_slots: 7  # Minimum memory size
+  max_memory_slots: 7  # Maximum memory size (keep bounded to avoid OOM)
   p_hidden_stateful_mutation: 0.00 # Mutate stateful/stateless flags for all registers, including action registers
 
   # Observations are stored in a buffer with this time window

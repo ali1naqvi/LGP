@@ -14,7 +14,6 @@ RATE_NAMES = {
     "delete": "Delete",
     "add": "Add",
     "mutate": "One-point mutation",
-    "redundancy": "Redundancy",
     "decoy": "Decoy",
 }
 
@@ -76,21 +75,35 @@ def read_checkpoint_agent_rates(path, best_team_id):
     output_rates = {}
     actions = {}
     teams = {}
+    four_rate_layout = set()
 
     with path.open() as handle:
         for line in handle:
             fields = line.rstrip().split(":")
             if fields[0] == "MemoryEigen" and fields[2] == "0":
                 program_id = int(fields[1])
-                values = [float(value) for value in fields[5:]]
-                if len(values) >= 8:
+                values = [float(value) for value in fields[4:]]
+                if len(values) >= 7:
                     start_rates[program_id] = values[2:8]
             elif fields[0] == "self_modifying_state":
                 output_rates[int(fields[1])] = [float(value) for value in fields[2:8]]
             elif fields[0] == "RegisterMachine":
                 actions[int(fields[1])] = int(fields[3])
+                if "SL4" in fields:
+                    four_rate_layout.add(int(fields[1]))
             elif fields[0] == "team":
                 teams[int(fields[1])] = [int(value) for value in fields[7:]]
+
+    # Old checkpoints include redundancy at offset 4 and decoy at offset 5.
+    # New SL4 checkpoints place decoy immediately after the four active rates.
+    for program_id in start_rates.keys() & output_rates.keys():
+        indices = [0, 1, 2, 3, 4 if program_id in four_rate_layout else 5]
+        if max(indices) >= min(len(start_rates[program_id]), len(output_rates[program_id])):
+            del start_rates[program_id]
+            del output_rates[program_id]
+            continue
+        start_rates[program_id] = [start_rates[program_id][i] for i in indices]
+        output_rates[program_id] = [output_rates[program_id][i] for i in indices]
 
     program_ids = set()
     pending_teams = [best_team_id]
@@ -236,8 +249,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Plot elite inherited and post-execution mutation rates."
     )
-    parser.add_argument("--experiment", default="pendulum_inherited_rates")
-    parser.add_argument("--generations", type=int, default=2000)
+    parser.add_argument("--experiment", default="pendulum_execution_modified_rates")
+    parser.add_argument("--generations", type=int, default=5000)
     parser.add_argument("--output", default="mutation_rates.pdf")
     parser.add_argument("--scope", choices=("elite", "best"), default="elite")
     args = parser.parse_args()

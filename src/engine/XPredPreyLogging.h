@@ -5,7 +5,7 @@
 #include <iomanip>
 #include <sstream>
 
-using XPredPreyRates = std::array<double, 6>;
+using XPredPreyRates = std::array<double, kSelfModifyingRegisterCount + 1>;
 
 inline XPredPreyRates ReadXPredPreyRates(const RegisterMachine& program,
                                       bool inherited = false) {
@@ -23,7 +23,7 @@ inline XPredPreyRates ReadXPredPreyRates(const RegisterMachine& program,
 
 inline std::string XPredPreyRateColumns(const std::string& prefix) {
   std::string columns;
-  for (int reg = 2; reg <= 7; ++reg) columns += "," + prefix + "_s" + std::to_string(reg);
+  for (size_t reg = kSelfModifyingFirstRegister; reg <= kSelfModifyingDecoyRegister; ++reg) columns += "," + prefix + "_s" + std::to_string(reg);
   return columns;
 }
 
@@ -56,6 +56,6 @@ inline std::string XPredPreyReproductionHeader() {
          "self_modifying,reset_before_mutation,mutation_pass" +
       XPredPreyRateColumns("encounter_output_raw") +
       XPredPreyRateColumns("inherited_before_raw") +
-      ",used_swap,used_delete,used_add,used_mutate,used_redundancy" +
+      ",used_swap,used_delete,used_add,used_mutate" +
       XPredPreyRateColumns("inherited_after_raw");
 }

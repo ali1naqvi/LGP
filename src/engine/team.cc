@@ -73,6 +73,9 @@ void team::InitMemory(map<long, team*>& teamMap,
    set<team*, teamIdComp> teams;
    set<RegisterMachine*, RegisterMachineIdComp> RegisterMachines;
    GetAllNodes(teamMap, teams, RegisterMachines);
+   const auto reset_setting = params.find("reset_self_modifying_per_episode");
+   const bool reset_self_modifying = reset_setting != params.end() &&
+       std::any_cast<int>(reset_setting->second) != 0;
    for (auto prog : RegisterMachines) {
       const bool use_self_modifying_constants = prog->self_modifying_;
       auto program_params = params;
@@ -83,8 +86,13 @@ void team::InitMemory(map<long, team*>& teamMap,
          prog->use_evolved_const_ = true;
          prog->ConfigureSelfModifyingRegisters(program_params, false);
          if (use_self_modifying_constants) {
-            // Preserve the rate phenotype generated in the preceding episode.
+            // Preserve the preceding episode's phenotype unless the episode
+            // reset ablation is enabled. Seeding explicitly also resets rate
+            // registers marked stateful, without changing their step behavior.
             prog->CopyPrivateConstToWorkingMemoryPreservingSelfModifyingRegisters();
+            if (reset_self_modifying) {
+               prog->SeedSelfModifyingWorkingFromConstants(program_params);
+            }
          } else {
             prog->CopyPrivateConstToWorkingMemory();
          }

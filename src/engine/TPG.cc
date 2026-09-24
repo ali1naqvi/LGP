@@ -657,7 +657,7 @@ void TPG::ProgramMutator_Instructions(RegisterMachine* prog_to_mu,
       die(__FILE__, __FUNCTION__, __LINE__,
           "n_mutation_passes must be at least one.");
    }
-   // Normally mutation consumes the parent's final self-modified S2-S7
+   // Normally mutation consumes the parent's final self-modified S2-S6
    // outputs. This ablation instead makes mutation consume the inherited
    // constants by resetting working memory before the first mutation pass.
    // Read the parent's actual phenotype for logging, before cloning can
@@ -1933,14 +1933,17 @@ void TPG::SetParams(int argc, char** argv) {
    // allow it to be overridden on the command line.
    params_["shadow_run"] = 0;
    // Baldwinian inheritance remains the default. Configurations can opt into
-   // writing parent-produced S2-S6 outputs into offspring constants.
+   // writing parent-produced S2-S5 outputs into offspring constants.
    params_["lamarkism_evolved_constants"] = 0;
-   // By default S2-S7 constants retain their historical ability to evolve.
+   // By default S2-S6 constants retain their historical ability to evolve.
    // Set this to 0 for the fixed-constant self-modification ablation.
    params_["evolve_self_modifying_constants"] = 1;
    // Preserve parent-produced rates through offspring mutation by default.
-   // Set to 1 to reset working S2-S7 from constants before mutation instead.
+   // Set to 1 to reset working S2-S6 from constants before mutation instead.
    params_["reset_self_modifying_before_mutation"] = 0;
+   // Preserve working S2-S6 across episodes by default. Set to 1 to seed
+   // them from inherited constants at the start of every episode.
+   params_["reset_self_modifying_per_episode"] = 0;
    // Optional replay-only episode limit; 0 preserves each task's default.
    params_["replay_max_timesteps"] = 0;
    if (argc > 1) {
@@ -3178,18 +3181,16 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
 
             // Average self-modifying mutation probabilities across the current
             // training elites. Start rates come from inherited constants;
-            // output rates come from working S2-S7; S7 is the neutral decoy.
+            // output rates come from working S2-S6; S6 is the neutral decoy.
             double elite_avg_start_rate_swap = 0.0;
             double elite_avg_start_rate_delete = 0.0;
             double elite_avg_start_rate_add = 0.0;
             double elite_avg_start_rate_mutate = 0.0;
-            double elite_avg_start_rate_redundancy = 0.0;
             double elite_avg_start_rate_decoy = 0.0;
             double elite_avg_output_rate_swap = 0.0;
             double elite_avg_output_rate_delete = 0.0;
             double elite_avg_output_rate_add = 0.0;
             double elite_avg_output_rate_mutate = 0.0;
-            double elite_avg_output_rate_redundancy = 0.0;
             double elite_avg_output_rate_decoy = 0.0;
             int elite_rate_team_count = 0;
             int elite_decoy_team_count = 0;
@@ -3204,13 +3205,11 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
                   double team_output_delete_sum = 0.0;
                   double team_output_add_sum = 0.0;
                   double team_output_mutate_sum = 0.0;
-                  double team_output_redundancy_sum = 0.0;
                   double team_output_decoy_sum = 0.0;
                   double team_start_swap_sum = 0.0;
                   double team_start_delete_sum = 0.0;
                   double team_start_add_sum = 0.0;
                   double team_start_mutate_sum = 0.0;
-                  double team_start_redundancy_sum = 0.0;
                   double team_start_decoy_sum = 0.0;
                   int team_decoy_program_count = 0;
                   for (const auto* prog : elite_team->members_) {
@@ -3235,8 +3234,6 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
                          scalar_memory->working_memory_[kSelfModifyingFirstRegister + 2](0, 0);
                      const double output_mutate =
                          scalar_memory->working_memory_[kSelfModifyingFirstRegister + 3](0, 0);
-                     const double output_redundancy =
-                         scalar_memory->working_memory_[kSelfModifyingFirstRegister + 4](0, 0);
                      const double start_swap =
                          scalar_memory->const_memory_[kSelfModifyingFirstRegister](0, 0);
                      const double start_delete =
@@ -3245,20 +3242,14 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
                          scalar_memory->const_memory_[kSelfModifyingFirstRegister + 2](0, 0);
                      const double start_mutate =
                          scalar_memory->const_memory_[kSelfModifyingFirstRegister + 3](0, 0);
-                     const double start_redundancy =
-                         scalar_memory->const_memory_[kSelfModifyingFirstRegister + 4](0, 0);
                      team_output_swap_sum += SelfModifyingRawTendencyToProbability(output_swap);
                      team_output_delete_sum += SelfModifyingRawTendencyToProbability(output_delete);
                      team_output_add_sum += SelfModifyingRawTendencyToProbability(output_add);
                      team_output_mutate_sum += SelfModifyingRawTendencyToProbability(output_mutate);
-                     team_output_redundancy_sum +=
-                         SelfModifyingRawTendencyToProbability(output_redundancy);
                      team_start_swap_sum += SelfModifyingRawTendencyToProbability(start_swap);
                      team_start_delete_sum += SelfModifyingRawTendencyToProbability(start_delete);
                      team_start_add_sum += SelfModifyingRawTendencyToProbability(start_add);
                      team_start_mutate_sum += SelfModifyingRawTendencyToProbability(start_mutate);
-                     team_start_redundancy_sum +=
-                         SelfModifyingRawTendencyToProbability(start_redundancy);
                      if (scalar_memory->working_memory_.size() >
                              kSelfModifyingDecoyRegister &&
                          scalar_memory->const_memory_.size() >
@@ -3280,8 +3271,6 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
                          team_output_add_sum / team_program_count;
                      elite_avg_output_rate_mutate +=
                          team_output_mutate_sum / team_program_count;
-                     elite_avg_output_rate_redundancy +=
-                         team_output_redundancy_sum / team_program_count;
                      elite_avg_start_rate_swap +=
                          team_start_swap_sum / team_program_count;
                      elite_avg_start_rate_delete +=
@@ -3290,8 +3279,6 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
                          team_start_add_sum / team_program_count;
                      elite_avg_start_rate_mutate +=
                          team_start_mutate_sum / team_program_count;
-                     elite_avg_start_rate_redundancy +=
-                         team_start_redundancy_sum / team_program_count;
                      elite_rate_team_count++;
                      if (team_decoy_program_count > 0) {
                         elite_avg_output_rate_decoy +=
@@ -3308,12 +3295,10 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
                elite_avg_start_rate_delete /= elite_rate_team_count;
                elite_avg_start_rate_add /= elite_rate_team_count;
                elite_avg_start_rate_mutate /= elite_rate_team_count;
-               elite_avg_start_rate_redundancy /= elite_rate_team_count;
                elite_avg_output_rate_swap /= elite_rate_team_count;
                elite_avg_output_rate_delete /= elite_rate_team_count;
                elite_avg_output_rate_add /= elite_rate_team_count;
                elite_avg_output_rate_mutate /= elite_rate_team_count;
-               elite_avg_output_rate_redundancy /= elite_rate_team_count;
             }
             if (elite_decoy_team_count > 0) {
                elite_avg_start_rate_decoy /= elite_decoy_team_count;
@@ -3388,13 +3373,11 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
                                                elite_avg_start_rate_delete,
                                                elite_avg_start_rate_add,
                                                elite_avg_start_rate_mutate,
-                                               elite_avg_start_rate_redundancy,
                                                elite_avg_start_rate_decoy)
                    .with_elite_avg_output_rates(elite_avg_output_rate_swap,
                                                 elite_avg_output_rate_delete,
                                                 elite_avg_output_rate_add,
                                                 elite_avg_output_rate_mutate,
-                                                elite_avg_output_rate_redundancy,
                                                 elite_avg_output_rate_decoy)
                    .with_operations_use(op_countsTally)
                    // NSGA-II Pareto front metrics
@@ -4630,8 +4613,7 @@ void TPG::LogReplaySelfModifyingRates(const EvalData& eval_data) {
    if (first_row) {
       out << "episode,timestep,program_count,start_swap,output_swap,"
              "start_delete,output_delete,start_add,output_add,"
-             "start_mutate,output_mutate,"
-             "start_redundancy,output_redundancy\n";
+             "start_mutate,output_mutate\n";
    }
    out << eval_data.episode << ',' << eval_data.timestep << ',' << count;
    for (size_t rate = 0; rate < kSelfModifyingRegisterCount; ++rate) {
@@ -4669,9 +4651,9 @@ void TPG::RestoreSelfModifyingRates(const std::vector<std::string>& fields) {
       throw std::runtime_error("Self-modifying state refers to an invalid program");
    auto* memory = found->second->private_memory_[MemoryEigen::kScalarType_];
    if (memory->working_memory_.size() < kSelfModifyingMinScalarRegisters)
-      throw std::runtime_error("Missing S2-S7 in self-modifying state recipient");
+      throw std::runtime_error("Missing S2-S6 in self-modifying state recipient");
    for (size_t i = 0; i < count; ++i) {
-      // The wire record begins at S2, NOT S1. Preserve S0/S1 and include S7.
+      // The wire record begins at S2, NOT S1. Preserve S0/S1 and include S6.
       try {
          memory->working_memory_[kSelfModifyingFirstRegister + i](0, 0) =
              SanitizeSelfModifyingRawTendency(std::stod(fields[i + 2]));

@@ -24,18 +24,16 @@ struct SelectionMetrics {
     // Equal-weighted mean across all training elite root teams. Each team's
     // value is itself the mean of its direct programs. Start rates are the
     // probability readout from inherited constants; output rates are the
-    // probability readout from working S2-S7. S7 is the neutral decoy.
+    // probability readout from working S2-S6. S6 is the neutral decoy.
     const double elite_avg_start_rate_swap;
     const double elite_avg_start_rate_delete;
     const double elite_avg_start_rate_add;
     const double elite_avg_start_rate_mutate;
-    const double elite_avg_start_rate_redundancy;
     const double elite_avg_start_rate_decoy;
     const double elite_avg_output_rate_swap;
     const double elite_avg_output_rate_delete;
     const double elite_avg_output_rate_add;
     const double elite_avg_output_rate_mutate;
-    const double elite_avg_output_rate_redundancy;
     const double elite_avg_output_rate_decoy;
     const std::string operations_use;
     

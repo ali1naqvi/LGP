@@ -156,12 +156,27 @@ test_mod: 0
 mj_n_eval_validation: <nonzero>
 ```
 
+### Self-modifying register episode reset
+
+Set `reset_self_modifying_per_episode: 1` in the same YAML section as
+`self_modifying` to reset S2–S5 (mutation rates) and S6 (decoy) to their
+inherited constants at the start of every episode. The default, `0`, preserves
+their working values across episodes. This applies only to self-modifying
+programs, including registers marked stateful; within-episode behavior is
+unchanged.
+
+This toggle is independent of `reset_per_episode` (Hebbian weights) and
+`reset_self_modifying_before_mutation` (which rates offspring mutation uses).
+With episode resets enabled and reset-before-mutation disabled, mutation uses
+the final episode's output rates. You can also pass
+`reset_self_modifying_per_episode=1` on the command line after `parameters_file`.
+
 ### 5. Plot results
 
 New selection CSVs include `self_modification_only_instruction_count`: the
 number of effective instructions retained exclusively for mutation-rate outputs
-(S2–S6), including their dependencies. Instructions also needed for bid/action
-outputs remain in the action count, and the S7 decoy is excluded. The metric is
+(S2–S5), including their dependencies. Instructions also needed for bid/action
+outputs remain in the action count, and the S6 decoy is excluded. The metric is
 zero when self-modification is disabled. Existing effective counts are unchanged.
 Subtract it from `effective_program_instruction_count` to obtain the effective
 instruction count for bid/action outputs. Both counts use the same policy traversal.
@@ -203,3 +218,14 @@ Delete all checkpoints and output files:
 ```
 tpg-cleanup.sh
 ```
+
+### Self-modifying register layout (four rates)
+
+Redundancy mutation has been removed. S2–S5 hold swap, delete, add, and point
+mutation rates; S6 is the isolated decoy. It cannot be read or written by policy
+instructions and is excluded from effective instruction/register counts.
+Self-modifying configurations have one fewer memory slot to preserve their
+ordinary scalar-register capacity. New checkpoints carry an `SL4` layout marker;
+legacy self-modifying checkpoints cannot be resumed or replayed with this build.
+Use fresh runs for comparisons: existing logs still reflect the previous engine.
+Selection and replay CSVs no longer emit redundancy-rate columns.
