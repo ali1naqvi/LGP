@@ -1099,6 +1099,37 @@ void RegisterMachine::MutateRegisterStatefulFlags(mt19937 &rng) {
    }
 }
 
+std::array<bool, 4> RegisterMachine::SelfModifyingRateSelection(
+    const std::unordered_map<std::string, std::any>& params) {
+   const auto it = params.find("self_modifying_mutation_rates");
+   if (it == params.end()) return {true, true, true, true};
+   if (it->second.type() != typeid(std::string))
+      throw std::invalid_argument("self_modifying_mutation_rates must be a quoted comma-separated string");
+   const auto selection = std::any_cast<std::string>(it->second);
+   std::array<bool, 4> selected{};
+   if (selection.empty()) return selected;
+   const std::array<std::string, 4> names = {
+       "p_instructions_swap", "p_instructions_delete",
+       "p_instructions_add", "p_instructions_mutate"};
+   std::istringstream input(selection);
+   std::string name;
+   while (std::getline(input, name, ',')) {
+      const auto first = name.find_first_not_of(" \t\r\n");
+      const auto last = name.find_last_not_of(" \t\r\n");
+      name = first == std::string::npos ? "" : name.substr(first, last - first + 1);
+      const auto found = std::find(names.begin(), names.end(), name);
+      if (found == names.end())
+         throw std::invalid_argument("Unknown self-modifying mutation rate: " + name);
+      const auto index = std::distance(names.begin(), found);
+      if (selected[index])
+         throw std::invalid_argument("Duplicate self-modifying mutation rate: " + name);
+      selected[index] = true;
+   }
+   if (selection.back() == ',')
+      throw std::invalid_argument("Empty entry in self_modifying_mutation_rates");
+   return selected;
+}
+
 std::array<double, kSelfModifyingRegisterCount> RegisterMachine::MutationProbabilities(
     const std::unordered_map<std::string, std::any>& params) const {
       double p_swap = std::any_cast<double>(params.at("p_instructions_swap"));
@@ -1117,15 +1148,16 @@ std::array<double, kSelfModifyingRegisterCount> RegisterMachine::MutationProbabi
             die(__FILE__, __FUNCTION__, __LINE__,
                 "self_modifying requires scalar registers S0-S6.");
          }
+         const auto selected = SelfModifyingRateSelection(params);
          const double rate_values[kSelfModifyingRegisterCount] = {
              scalar_memory->working_memory_[kSelfModifyingFirstRegister](0, 0),
              scalar_memory->working_memory_[kSelfModifyingFirstRegister + 1](0, 0),
              scalar_memory->working_memory_[kSelfModifyingFirstRegister + 2](0, 0),
              scalar_memory->working_memory_[kSelfModifyingFirstRegister + 3](0, 0)};
-         p_swap = SelfModifyingRawTendencyToProbability(rate_values[0]);
-         p_delete = SelfModifyingRawTendencyToProbability(rate_values[1]);
-         p_add = SelfModifyingRawTendencyToProbability(rate_values[2]);
-         p_mutate = SelfModifyingRawTendencyToProbability(rate_values[3]);
+         if (selected[0]) p_swap = SelfModifyingRawTendencyToProbability(rate_values[0]);
+         if (selected[1]) p_delete = SelfModifyingRawTendencyToProbability(rate_values[1]);
+         if (selected[2]) p_add = SelfModifyingRawTendencyToProbability(rate_values[2]);
+         if (selected[3]) p_mutate = SelfModifyingRawTendencyToProbability(rate_values[3]);
       }
       p_swap = mutation_rate_genome_.Rate("p_instructions_swap", p_swap);
       p_delete = mutation_rate_genome_.Rate("p_instructions_delete", p_delete);

@@ -1895,6 +1895,7 @@ void TPG::InitTeams() {
 /******************************************************************************/
 // Certain parameters must be processed here
 void TPG::ProcessParams() {
+   RegisterMachine::SelfModifyingRateSelection(params_);
    MutationRateGenome::FromParams(params_);
    for (const char* key : {"predator_population_self_modifying",
                            "prey_population_self_modifying"}) {
@@ -1935,6 +1936,8 @@ void TPG::SetParams(int argc, char** argv) {
    // Keep this opt-in parameter available to every existing configuration and
    // allow it to be overridden on the command line.
    params_["shadow_run"] = 0;
+   params_["self_modifying_mutation_rates"] = std::string(
+       "p_instructions_swap,p_instructions_delete,p_instructions_add,p_instructions_mutate");
    params_["genome_mutation_rates"] = std::string("");
    params_["genome_rate_sigma"] = 0.2;
    params_["genome_rate_min"] = 0.000001;
@@ -3199,6 +3202,7 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
             double elite_avg_output_rate_add = 0.0;
             double elite_avg_output_rate_mutate = 0.0;
             double elite_avg_output_rate_decoy = 0.0;
+            const auto selected_rates = RegisterMachine::SelfModifyingRateSelection(params_);
             int elite_rate_team_count = 0;
             int elite_decoy_team_count = 0;
             const bool genome_rates = !MutationRateGenome::FromParams(params_).genes.empty();
@@ -3263,14 +3267,30 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
                          scalar_memory->const_memory_[kSelfModifyingFirstRegister + 2](0, 0);
                      const double start_mutate =
                          scalar_memory->const_memory_[kSelfModifyingFirstRegister + 3](0, 0);
-                     team_output_swap_sum += SelfModifyingRawTendencyToProbability(output_swap);
-                     team_output_delete_sum += SelfModifyingRawTendencyToProbability(output_delete);
-                     team_output_add_sum += SelfModifyingRawTendencyToProbability(output_add);
-                     team_output_mutate_sum += SelfModifyingRawTendencyToProbability(output_mutate);
-                     team_start_swap_sum += SelfModifyingRawTendencyToProbability(start_swap);
-                     team_start_delete_sum += SelfModifyingRawTendencyToProbability(start_delete);
-                     team_start_add_sum += SelfModifyingRawTendencyToProbability(start_add);
-                     team_start_mutate_sum += SelfModifyingRawTendencyToProbability(start_mutate);
+                     team_output_swap_sum += selected_rates[0]
+                         ? SelfModifyingRawTendencyToProbability(output_swap)
+                         : MutationRateGenome::Number(params_, "p_instructions_swap", 0.0);
+                     team_output_delete_sum += selected_rates[1]
+                         ? SelfModifyingRawTendencyToProbability(output_delete)
+                         : MutationRateGenome::Number(params_, "p_instructions_delete", 0.0);
+                     team_output_add_sum += selected_rates[2]
+                         ? SelfModifyingRawTendencyToProbability(output_add)
+                         : MutationRateGenome::Number(params_, "p_instructions_add", 0.0);
+                     team_output_mutate_sum += selected_rates[3]
+                         ? SelfModifyingRawTendencyToProbability(output_mutate)
+                         : MutationRateGenome::Number(params_, "p_instructions_mutate", 1.0);
+                     team_start_swap_sum += selected_rates[0]
+                         ? SelfModifyingRawTendencyToProbability(start_swap)
+                         : MutationRateGenome::Number(params_, "p_instructions_swap", 0.0);
+                     team_start_delete_sum += selected_rates[1]
+                         ? SelfModifyingRawTendencyToProbability(start_delete)
+                         : MutationRateGenome::Number(params_, "p_instructions_delete", 0.0);
+                     team_start_add_sum += selected_rates[2]
+                         ? SelfModifyingRawTendencyToProbability(start_add)
+                         : MutationRateGenome::Number(params_, "p_instructions_add", 0.0);
+                     team_start_mutate_sum += selected_rates[3]
+                         ? SelfModifyingRawTendencyToProbability(start_mutate)
+                         : MutationRateGenome::Number(params_, "p_instructions_mutate", 1.0);
                      if (scalar_memory->working_memory_.size() >
                              kSelfModifyingDecoyRegister &&
                          scalar_memory->const_memory_.size() >

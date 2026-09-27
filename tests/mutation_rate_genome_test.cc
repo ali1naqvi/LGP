@@ -13,7 +13,7 @@ int main() {
    // New keys are available as CLI overrides even with an unchanged legacy YAML.
    TPG cli;
    char arg0[] = "test";
-   char arg1[] = "parameters_file=configs/pendulum_fixed_rates.yaml";
+   char arg1[] = "parameters_file=configs/ant_fixed_rates.yaml";
    char arg2[] = "genome_mutation_rates=p_instructions_swap";
    char arg3[] = "genome_rate_sigma=0";
    char* args[] = {arg0, arg1, arg2, arg3};
@@ -21,7 +21,7 @@ int main() {
    assert(MutationRateGenome::FromParams(cli.params_).genes.size() == 1);
 
    TPG tpg;
-   tpg.ReadParameters("configs/pendulum_fixed_individual.yaml", tpg.params_);
+   tpg.ReadParameters("configs/pendulum_fixed_individual_all.yaml", tpg.params_);
    auto& p = tpg.params_;
    p["genome_mutation_rates"] = std::string("p_instructions_add,p_instructions_mutate");
    p["min_initial_mem_slots"] = 2; // No reserved S2-S6 needed.
@@ -205,5 +205,49 @@ int main() {
    Rejects([&] { MutationRateGenome::FromParams(bad); });
    Rejects([&] { genome.Decode(inherited, disabled); });
    Rejects([&] { genome.Decode("MRG1|p_instructions_add=nan", p); });
+   // Every self-modifying subset uses registers only for selected operators.
+   TPG self_tpg;
+   self_tpg.ReadParameters("configs/pendulum_inherited_rates_no_limit.yaml", self_tpg.params_);
+   auto self_params = self_tpg.params_;
+   RegisterMachine self_program(-1, 0, self_params, self_tpg.state_, rng, self_tpg._ops);
+   const std::array<std::string, 4> rate_names = {
+       "p_instructions_swap", "p_instructions_delete",
+       "p_instructions_add", "p_instructions_mutate"};
+   for (int i = 0; i < 4; ++i) {
+      self_params[rate_names[i]] = 0.1 * (i + 1);
+      self_program.private_memory_[0]->const_memory_[i + 2](0, 0) = -1.0;
+      self_program.private_memory_[0]->working_memory_[i + 2](0, 0) = 1.0;
+   }
+   for (unsigned mask = 0; mask < 16; ++mask) {
+      std::string selection;
+      for (int i = 0; i < 4; ++i) {
+         if (!(mask & (1u << i))) continue;
+         if (!selection.empty()) selection += ',';
+         selection += rate_names[i];
+      }
+      self_params["self_modifying_mutation_rates"] = selection;
+      for (int reset = 0; reset < 2; ++reset) {
+         for (int i = 0; i < 4; ++i)
+            self_program.private_memory_[0]->working_memory_[i + 2](0, 0) = 1.0;
+         if (reset) self_program.SeedSelfModifyingWorkingFromConstants(self_params);
+         const auto rates = self_program.MutationProbabilities(self_params);
+         for (int i = 0; i < 4; ++i) {
+            const double expected_rate = (mask & (1u << i))
+                ? SelfModifyingRawTendencyToProbability(reset ? -1.0 : 1.0)
+                : 0.1 * (i + 1);
+            assert(rates[i] == expected_rate);
+         }
+      }
+   }
+   self_params.erase("self_modifying_mutation_rates");
+   for (bool selected : RegisterMachine::SelfModifyingRateSelection(self_params)) assert(selected);
+   self_params["self_modifying_mutation_rates"] = std::string(" p_instructions_add ");
+   assert(RegisterMachine::SelfModifyingRateSelection(self_params)[2]);
+   for (const auto* invalid : {"bad", "p_instructions_add,p_instructions_add", "p_instructions_add,", ","}) {
+      self_params["self_modifying_mutation_rates"] = std::string(invalid);
+      Rejects([&] { RegisterMachine::SelfModifyingRateSelection(self_params); });
+   }
+   self_params["self_modifying_mutation_rates"] = 1;
+   Rejects([&] { RegisterMachine::SelfModifyingRateSelection(self_params); });
    std::cout << "Mutation-rate genome integration tests passed\n";
 }
