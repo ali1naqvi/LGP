@@ -184,6 +184,8 @@ std::string RegisterMachine::ToString(bool effective_only) {
    }
    oss << ":SM" << (self_modifying_ ? 1 : 0);
    oss << ":SL4"; // Four mutation rates; S6 is the decoy.
+   const auto rate_genes = mutation_rate_genome_.Encode();
+   if (!rate_genes.empty()) oss << ":" << rate_genes;
    // for (auto &i : private_memory_ids_) oss << ":" << i;
    auto prog = effective_only ? instructions_effective_ : instructions_;
    for (auto istr : prog) oss << ":" << istr->ToString();
@@ -439,6 +441,7 @@ RegisterMachine::RegisterMachine(
     long action, int team_obs_index, std::unordered_map<std::string, std::any>& params,
     std::unordered_map<std::string, int>& state, mt19937& rng,
     std::vector<bool>& legal_ops) {
+   mutation_rate_genome_ = MutationRateGenome::FromParams(params);
    action_ = action;
    self_modifying_ = SelfModifyingEnabled(params);
    stateful_ = std::any_cast<int>(params["stateful"]);
@@ -517,6 +520,7 @@ RegisterMachine::RegisterMachine(
     std::unordered_map<std::string, std::any> &params,
     std::unordered_map<std::string, int> &state, mt19937 &rng,
     std::vector<bool> &legal_ops, int inherited_n_memories) {
+   mutation_rate_genome_ = MutationRateGenome::FromParams(params);
    action_ = action;
    self_modifying_ = SelfModifyingEnabled(params);
    stateful_ = std::any_cast<int>(params["stateful"]);
@@ -585,6 +589,7 @@ RegisterMachine::RegisterMachine(
 
 // Copy Contructor
 RegisterMachine::RegisterMachine(RegisterMachine& rm) {
+   mutation_rate_genome_ = rm.mutation_rate_genome_;
    action_ = rm.action_;
    gtime_ = rm.gtime_;
    id_ = rm.id_;
@@ -616,6 +621,7 @@ RegisterMachine::RegisterMachine(RegisterMachine& rm) {
 RegisterMachine::RegisterMachine(
     RegisterMachine& rm, std::unordered_map<std::string, std::any>& params,
     std::unordered_map<std::string, int>& state, mt19937& rng) {
+   mutation_rate_genome_ = rm.mutation_rate_genome_;
    action_ = rm.action_;
    self_modifying_ = SelfModifyingEnabled(params);
    gtime_ = state["t_current"];
@@ -665,6 +671,7 @@ RegisterMachine::RegisterMachine(
    initial_heb_noise_ = stod(outcomeFields[f++].c_str());
    obs_index_ = atoi(outcomeFields[f++].c_str());
    n_memories_ = atoi(outcomeFields[f++].c_str());
+   mutation_rate_genome_ = MutationRateGenome::FromParams(params);
    self_modifying_ = SelfModifyingEnabled(params);
    operations_additive_ = OperationsAdditiveEnabled(params);
    matrix_modulation = (std::any_cast<int>(params["matrix_modulation"]) == 1);
@@ -687,6 +694,10 @@ RegisterMachine::RegisterMachine(
    const bool current_layout = f < static_cast<int>(outcomeFields.size()) &&
                                outcomeFields[f] == "SL4";
    if (current_layout) ++f;
+   if (f < static_cast<int>(outcomeFields.size()) &&
+       outcomeFields[f].rfind("MRG", 0) == 0) {
+      mutation_rate_genome_.Decode(outcomeFields[f++], params);
+   }
    if (self_modifying_ && !current_layout) {
       throw std::runtime_error(
           "Legacy self-modifying checkpoint has the removed redundancy layout. "
@@ -1116,6 +1127,10 @@ std::array<double, kSelfModifyingRegisterCount> RegisterMachine::MutationProbabi
          p_add = SelfModifyingRawTendencyToProbability(rate_values[2]);
          p_mutate = SelfModifyingRawTendencyToProbability(rate_values[3]);
       }
+      p_swap = mutation_rate_genome_.Rate("p_instructions_swap", p_swap);
+      p_delete = mutation_rate_genome_.Rate("p_instructions_delete", p_delete);
+      p_add = mutation_rate_genome_.Rate("p_instructions_add", p_add);
+      p_mutate = mutation_rate_genome_.Rate("p_instructions_mutate", p_mutate);
       return {p_swap, p_delete, p_add, p_mutate};
 }
 

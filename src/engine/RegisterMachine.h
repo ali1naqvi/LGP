@@ -2,6 +2,7 @@
 #define RegisterMachine_h
 
 #include "instruction.h"
+#include "MutationRateGenome.h"
 #include <array>
 
 class EvalData;
@@ -10,6 +11,7 @@ class EvalData;
 
 class RegisterMachine {
   public:
+   MutationRateGenome mutation_rate_genome_;
    bool from_string_ = false;        // TODO(skelly):remove
    bool use_evolved_const_ = false;  // Fixed parameter: whether to use constants
    bool stateful_ = false;           // Fixed parameter: whether memories maintain state

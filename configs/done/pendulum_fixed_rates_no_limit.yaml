@@ -100,10 +100,10 @@ program_parameters:
   max_memory_size: 1  # Maximum memory size
 
   gene_clone: 0
-  min_initial_mem_slots: 11
-  max_initial_mem_slots: 11
-  min_memory_slots: 11  # Minimum memory size
-  max_memory_slots: 11  # Maximum memory size (keep bounded to avoid OOM)
+  min_initial_mem_slots: 10
+  max_initial_mem_slots: 10
+  min_memory_slots: 10  # Minimum memory size
+  max_memory_slots: 10  # Maximum memory size (keep bounded to avoid OOM)
   p_hidden_stateful_mutation: 0.00 # Mutate stateful/stateless flags for all registers, including action registers
 
   # Observations are stored in a buffer with this time window
@@ -239,25 +239,25 @@ operations:
   # SCALAR_CUBE_OP: 1
 
   # # # Vector Operations:
-  VECTOR_HEAVYSIDE_OP: 1
-  MATRIX_HEAVYSIDE_OP: 1
-  SCALAR_VECTOR_PRODUCT_OP: 1
-  SCALAR_BROADCAST_OP: 1
-  VECTOR_RECIPROCAL_OP: 1
-  VECTOR_NORM_OP: 1
-  VECTOR_ABS_OP: 1
-  VECTOR_SUM_OP: 1
-  VECTOR_ACCUM_OP: 1
-  VECTOR_DIFF_OP: 1
-  VECTOR_PRODUCT_OP: 1
-  VECTOR_DIVISION_OP: 1
-  VECTOR_INNER_PRODUCT_OP: 1
-  VECTOR_MIN_OP: 1
-  VECTOR_MAX_OP: 1
-  VECTOR_MEAN_OP: 1
-  VECTOR_ST_DEV_OP: 1
-  VECTOR_CONST_SET_OP: 1
-  SCALAR_VECTOR_ASSIGN_OP: 1
+  # VECTOR_HEAVYSIDE_OP: 1
+  # MATRIX_HEAVYSIDE_OP: 1
+  # SCALAR_VECTOR_PRODUCT_OP: 1
+  # SCALAR_BROADCAST_OP: 1
+  # VECTOR_RECIPROCAL_OP: 1
+  # VECTOR_NORM_OP: 1
+  # VECTOR_ABS_OP: 1
+  # VECTOR_SUM_OP: 1
+  # VECTOR_ACCUM_OP: 1
+  # VECTOR_DIFF_OP: 1
+  # VECTOR_PRODUCT_OP: 1
+  # VECTOR_DIVISION_OP: 1
+  # VECTOR_INNER_PRODUCT_OP: 1
+  # VECTOR_MIN_OP: 1
+  # VECTOR_MAX_OP: 1
+  # VECTOR_MEAN_OP: 1
+  # VECTOR_ST_DEV_OP: 1
+  # VECTOR_CONST_SET_OP: 1
+  # SCALAR_VECTOR_ASSIGN_OP: 1
 
   # # Matrix Operations:
   # VECTOR_OUTER_PRODUCT_OP: 1

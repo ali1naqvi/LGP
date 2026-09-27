@@ -73,10 +73,11 @@ program_parameters:
   p_instructions_delete: 0.1  # Probability of deleting an instruction
   p_instructions_add: 0.1  # Probability of adding an instruction
   n_mutation_passes: 1  # Number of stacked mutation passes per selected program
-  self_modifying: 0  # Enable S2-S5 mutation-rate readout and S6 decoy
-  evolve_self_modifying_constants: 0  # Evolve inherited S2-S6 constants when enabled
-  reset_self_modifying_before_mutation: 0  # 1: inherited constants; 0: parent output rates
-  reset_self_modifying_per_episode: 0  # 1: reset S2-S6 to inherited constants each episode; 0: carry over
+  self_modifying: 0  # Rate genes are independent of executable registers
+  genome_mutation_rates: "p_instructions_swap,p_instructions_delete,p_instructions_add,p_instructions_mutate"
+  genome_rate_sigma: 0.2  # Perturb inherited rates once at birth; fixed during execution
+  genome_rate_min: 0.000001
+  genome_rate_max: 0.999999
   operations_additive: 0  # Make every instruction add its result to the destination register
 
   p_memory_mu_const: 0.25  # Probability of mutating constants
@@ -88,16 +89,16 @@ program_parameters:
   p_memory_slots: 0.0 # Program variation: probability of changing memory slots
   stateful: 1 # Use stateful programs
   skip_introns: 1  # Whether to skip introns during evaluation
-  continuous_output: 1  # Scalar S1 controls torque, clamped by the task to [-2, 2]
-  n_input: "3"  # cos(theta), sin(theta), angular velocity
+  continuous_output: 2  # Vector V1 supplies 8 actuator outputs
+  n_input: "29"  # Observation count in this repository's environment
   min_prog_size: 1
   min_initial_prog_size: 1
   max_initial_prog_size: 25  # Max initial program size
-  max_prog_size: 200  # Max program size
+  max_prog_size: 100  # Max program size
 
-  memory_size: 1  # Dimensionality for vector & matrix memory
-  min_memory_size: 1  # Minimum memory size
-  max_memory_size: 1  # Maximum memory size
+  memory_size: 8  # Fixed vector/matrix dimension matching the actuator count
+  min_memory_size: 8  # Fixed vector/matrix dimension matching the actuator count
+  max_memory_size: 8  # Fixed vector/matrix dimension matching the actuator count
 
   gene_clone: 0
   min_initial_mem_slots: 11
@@ -120,7 +121,7 @@ program_parameters:
 # General Task Parameters
 general_task_parameters:
   # Which tasks are active
-  active_tasks: "Pendulum"  # Native classic-control environment
+  active_tasks: "Mujoco_Ant_v4"  # MuJoCo environment
   partially_observable: 0  # Use the partially-observable version of a task, if available
   activation_function: 2
   n_discrete_action: 0  # Continuous force only
@@ -136,7 +137,7 @@ recursive_forecasting:
   forecast_horizon_test: 100  # Forecasting horizon during testing
   forecast_n_eval_train: 20  # Number of evaluations for training
   forecast_n_eval_val: 10  # Number of evaluations for validation
-  forecast_n_eval_test: 10
+  forecast_n_eval_test: 0  # Test episodes disabled
 # Parameters Specific to Ali's experimental tests.
 hebbian_parameters:
   probabilistic_bid: 0 # this is only for sub-teams for now (since reward modulation is only here)
@@ -165,11 +166,11 @@ TD_parameters:
 # Parameters Specific to Mujoco
 mujoco_parameters:
   mj_model_path: "$TPG/datasets/mujoco_models/"  # Model path
-  mj_max_timestep: 200  # Max simulation time steps
+  mj_max_timestep: 1000  # Episode limit in control steps
   mj_reward_control_weight: 0.0
-  mj_n_eval_train: 50  # Number of training evaluations
-  mj_n_eval_validation: 0  # Number of validation evaluations
-  mj_n_eval_test: 0  # Number of test evaluations
+  mj_n_eval_train: 5  # Number of train episodes
+  mj_n_eval_validation: 20  # Number of validation episodes
+  mj_n_eval_test: 0  # Test episodes disabled
 
   mj_break_leg_ant: 0.0
   mj_damage_progression_rate: 0.0
@@ -182,7 +183,7 @@ gradient_parameters:
   gradient_max_timestep: 200  # Max simulation time steps per episode
   gradient_n_eval_train: 5  # Number of training evaluations
   gradient_n_eval_validation: 0  # Number of validation evaluations
-  gradient_n_eval_test: 1  # Number of test evaluations (replay uses TEST phase; must be >=1 to render a video)
+  gradient_n_eval_test: 0  # Test episodes disabled
   gradient_sticky_walls: 0
   gradient_discrete: 0   # 1: discrete no-op + 4-direction actions; 0: continuous (turn/drive)
   gradient_multi_output: 1 # 1: single scalar action; >1: take N sequential actions from vector register 1 (N = vector dim)
@@ -260,36 +261,32 @@ operations:
   SCALAR_VECTOR_ASSIGN_OP: 1
 
   # # Matrix Operations:
-  # VECTOR_OUTER_PRODUCT_OP: 1
-  # SCALAR_MATRIX_PRODUCT_OP: 1
-  # MATRIX_RECIPROCAL_OP: 1
-  # MATRIX_VECTOR_PRODUCT_OP: 1
-  # VECTOR_COLUMN_BROADCAST_OP: 1
-  # VECTOR_ROW_BROADCAST_OP: 1
-  # MATRIX_NORM_OP: 1
-  # MATRIX_COLUMN_NORM_OP: 1
-  # MATRIX_ROW_NORM_OP: 1
-  # MATRIX_TRANSPOSE_OP: 1
-  # MATRIX_ABS_OP: 1
-  # MATRIX_SUM_OP: 1
-  # MATRIX_DIFF_OP: 1
-  # MATRIX_PRODUCT_OP: 1
-  # MATRIX_DIVISION_OP: 1
-  # MATRIX_MATRIX_PRODUCT_OP: 1
-  # MATRIX_MIN_OP: 1
-  # MATRIX_MAX_OP: 1
-  # MATRIX_MEAN_OP: 1
-  # MATRIX_ROW_MEAN_OP: 1
-  # MATRIX_ROW_ST_DEV_OP: 1
-  # MATRIX_ST_DEV_OP: 1
-  # MATRIX_CONST_SET_OP: 1
-  # SCALAR_MATRIX_ASSIGN_OP: 1
+  VECTOR_OUTER_PRODUCT_OP: 1
+  SCALAR_MATRIX_PRODUCT_OP: 1
+  MATRIX_RECIPROCAL_OP: 1
+  MATRIX_VECTOR_PRODUCT_OP: 1
+  VECTOR_COLUMN_BROADCAST_OP: 1
+  VECTOR_ROW_BROADCAST_OP: 1
+  MATRIX_NORM_OP: 1
+  MATRIX_COLUMN_NORM_OP: 1
+  MATRIX_ROW_NORM_OP: 1
+  MATRIX_TRANSPOSE_OP: 1
+  MATRIX_ABS_OP: 1
+  MATRIX_SUM_OP: 1
+  MATRIX_DIFF_OP: 1
+  MATRIX_PRODUCT_OP: 1
+  MATRIX_DIVISION_OP: 1
+  MATRIX_MATRIX_PRODUCT_OP: 1
+  MATRIX_MIN_OP: 1
+  MATRIX_MAX_OP: 1
+  MATRIX_MEAN_OP: 1
+  MATRIX_ROW_MEAN_OP: 1
+  MATRIX_ROW_ST_DEV_OP: 1
+  MATRIX_ST_DEV_OP: 1
+  MATRIX_CONST_SET_OP: 1
+  SCALAR_MATRIX_ASSIGN_OP: 1
 
-# Standard continuous Pendulum and evaluation budgets.
-pendulum_parameters:
-  pendulum_max_timesteps: 200
-  pendulum_n_eval_train: 20
-  pendulum_n_eval_validation: 5
-  pendulum_n_eval_test: 100
+# Separate evaluation episode seeds.
+evaluation_parameters:
   validation_episode_seed_offset: 10000
   test_episode_seed_offset: 20000

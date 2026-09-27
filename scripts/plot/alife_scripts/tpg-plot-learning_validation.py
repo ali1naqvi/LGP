@@ -8,13 +8,13 @@ import pandas as pd
 
 plt.style.use("seaborn-v0_8-whitegrid")
 
-GENERATIONS = 2000
+GENERATIONS = 5000
 BASE_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "../../..", "experiments")
 )
 EXPERIMENTS = (
     ("pendulum_execution_modified_rates", "Modified Rates", "tab:green"),
-    ("pendulum_fixed_rates", "Fixed Rates", "tab:blue"),
+    ("pendulum_execution_modified_rates_no_limit", "Modified Rates No Limit", "tab:blue"),
     ("pendulum_inherited_rates", "Inherited Rates", "tab:orange"),
 )
 

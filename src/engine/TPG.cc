@@ -670,6 +670,8 @@ void TPG::ProgramMutator_Instructions(RegisterMachine* prog_to_mu,
    if (reset_before) {
       prog_to_mu->SeedSelfModifyingWorkingFromConstants(program_params);
    }
+   // Inherited strategy genes change once at birth, then remain fixed during execution.
+   prog_to_mu->mutation_rate_genome_.Mutate(program_params, rngs_[TPG_SEED]);
    for (int pass = 0; pass < mutation_passes; ++pass) {
       const auto inherited_before = ReadXPredPreyRates(*prog_to_mu, true);
       const auto used = prog_to_mu->MutationProbabilities(program_params);
@@ -1893,6 +1895,7 @@ void TPG::InitTeams() {
 /******************************************************************************/
 // Certain parameters must be processed here
 void TPG::ProcessParams() {
+   MutationRateGenome::FromParams(params_);
    for (const char* key : {"predator_population_self_modifying",
                            "prey_population_self_modifying"}) {
       const auto setting = params_.find(key);
@@ -1932,6 +1935,10 @@ void TPG::SetParams(int argc, char** argv) {
    // Keep this opt-in parameter available to every existing configuration and
    // allow it to be overridden on the command line.
    params_["shadow_run"] = 0;
+   params_["genome_mutation_rates"] = std::string("");
+   params_["genome_rate_sigma"] = 0.2;
+   params_["genome_rate_min"] = 0.000001;
+   params_["genome_rate_max"] = 0.999999;
    // Baldwinian inheritance remains the default. Configurations can opt into
    // writing parent-produced S2-S5 outputs into offspring constants.
    params_["lamarkism_evolved_constants"] = 0;
@@ -3194,7 +3201,8 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
             double elite_avg_output_rate_decoy = 0.0;
             int elite_rate_team_count = 0;
             int elite_decoy_team_count = 0;
-            if (self_modifying) {
+            const bool genome_rates = !MutationRateGenome::FromParams(params_).genes.empty();
+            if (self_modifying || genome_rates) {
                for (const auto* elite_team : GetRootTeamsInVec()) {
                   if (!elite_team || !elite_team->elite(_TRAIN_PHASE)) {
                      continue;
@@ -3213,6 +3221,19 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
                   double team_start_decoy_sum = 0.0;
                   int team_decoy_program_count = 0;
                   for (const auto* prog : elite_team->members_) {
+                     if (prog && !prog->mutation_rate_genome_.genes.empty()) {
+                        const auto rates = prog->MutationProbabilities(params_);
+                        team_start_swap_sum += rates[0];
+                        team_output_swap_sum += rates[0];
+                        team_start_delete_sum += rates[1];
+                        team_output_delete_sum += rates[1];
+                        team_start_add_sum += rates[2];
+                        team_output_add_sum += rates[2];
+                        team_start_mutate_sum += rates[3];
+                        team_output_mutate_sum += rates[3];
+                        ++team_program_count;
+                        continue;
+                     }
                      if (!prog ||
                          prog->private_memory_.size() <= MemoryEigen::kScalarType_) {
                         continue;
@@ -3619,6 +3640,7 @@ void TPG::RegisterMachineCrossover(RegisterMachine* p1, RegisterMachine* p2,
                           p1_chunks[2].end());
    *c1 = new RegisterMachine(p1->action_, c1_instructions, p1_params, state_,
                              rngs_[TPG_SEED], _ops, p1->n_memories_);
+   (*c1)->mutation_rate_genome_ = p1->mutation_rate_genome_;
 
    // Cretae child 2 (c2) from parent chunks {p2-0, p1-1, p2-2}
    std::vector<instruction*> c2_instructions;
@@ -3630,6 +3652,7 @@ void TPG::RegisterMachineCrossover(RegisterMachine* p1, RegisterMachine* p2,
                           p2_chunks[2].end());
    *c2 = new RegisterMachine(p2->action_, c2_instructions, p2_params, state_,
                              rngs_[TPG_SEED], _ops, p2->n_memories_);
+   (*c2)->mutation_rate_genome_ = p2->mutation_rate_genome_;
 }
 
 void TPG::LinearCrossover(RegisterMachine* gp1,
@@ -3691,7 +3714,9 @@ void TPG::LinearCrossover(RegisterMachine* gp1,
     // Fallback: Clone if too small to cut
     if (mods1.size() < 2 || mods2.size() < 2) {
         *c1 = new RegisterMachine(gp1->action_, gp1->instructions_, gp1_params, state_, rngs_[TPG_SEED], _ops, gp1->n_memories_);
+        (*c1)->mutation_rate_genome_ = gp1->mutation_rate_genome_;
         *c2 = new RegisterMachine(gp2->action_, gp2->instructions_, gp2_params, state_, rngs_[TPG_SEED], _ops, gp2->n_memories_);
+        (*c2)->mutation_rate_genome_ = gp2->mutation_rate_genome_;
         return;
     }
 
@@ -3782,7 +3807,9 @@ void TPG::LinearCrossover(RegisterMachine* gp1,
     build_prog(gp1, gp2, owner_c2, c2_instrs);
 
     *c1 = new RegisterMachine(gp1->action_, c1_instrs, gp1_params, state_, rngs_[TPG_SEED], _ops, gp1->n_memories_);
+    (*c1)->mutation_rate_genome_ = gp1->mutation_rate_genome_;
     *c2 = new RegisterMachine(gp2->action_, c2_instrs, gp2_params, state_, rngs_[TPG_SEED], _ops, gp2->n_memories_);
+    (*c2)->mutation_rate_genome_ = gp2->mutation_rate_genome_;
 }
 
 // void TPG::LinearCrossover(RegisterMachine* gp1,

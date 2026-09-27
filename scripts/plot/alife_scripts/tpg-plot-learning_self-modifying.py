@@ -15,6 +15,7 @@ BASE_PATH = os.path.abspath(
 )
 EXPERIMENTS = (
     ("pendulum_execution_modified_rates", "Modified Rates", "tab:green"),
+    ("pendulum_execution_modified_rates_no_limit", "Modified Rates No Limit", "tab:red"),
 )
 TOTAL = "program_instruction_count"
 EFFECTIVE = "effective_program_instruction_count"
