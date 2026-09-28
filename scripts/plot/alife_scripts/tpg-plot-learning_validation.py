@@ -13,9 +13,9 @@ BASE_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "../../..", "experiments")
 )
 EXPERIMENTS = (
-    ("pendulum_execution_modified_rates", "Modified Rates", "tab:green"),
-    ("pendulum_execution_modified_rates_no_limit", "Modified Rates No Limit", "tab:blue"),
-    ("pendulum_inherited_rates", "Inherited Rates", "tab:orange"),
+("pendulum_execution_modified_rates_no_limit", "Modified Mutation Rates", "tab:green"),
+("pendulum_fixed_individual_all", "Fixed Individual Mutation Rates", "tab:blue"),
+("pendulum_fixed_rates_no_limit", "Fixed Mutation Rates", "tab:orange"),
 )
 
 

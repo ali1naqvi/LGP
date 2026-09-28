@@ -14,8 +14,9 @@ BASE_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "../../..", "experiments")
 )
 EXPERIMENTS = (
-    ("pendulum_execution_modified_rates", "Modified Rates", "tab:green"),
-    ("pendulum_execution_modified_rates_no_limit", "Modified Rates no limit", "tab:blue"),
+("pendulum_execution_modified_rates_no_limit", "Modified Mutation Rates", "tab:green"),
+("pendulum_fixed_individual_all", "Fixed Individual Mutation Rates", "tab:blue"),
+("pendulum_fixed_rates_no_limit", "Fixed Mutation Rates", "tab:orange"),
 )
 TOTAL = "program_instruction_count"
 EFFECTIVE = "effective_program_instruction_count"
@@ -62,7 +63,7 @@ def save_overview(data_by_experiment, column, filename, title):
     for experiment, label, color in EXPERIMENTS:
         plot_summary(ax, data_by_experiment[experiment], column, label, color)
     ax.set(xlabel="Generation", ylabel="Instruction count", title=title)
-    ax.legend(fontsize=11, frameon=True)
+    ax.legend(loc="upper left", fontsize=11, frameon=True)
     fig.savefig(filename, format="pdf", bbox_inches="tight")
     plt.close(fig)
 
