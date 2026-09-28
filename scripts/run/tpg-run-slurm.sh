@@ -1,18 +1,13 @@
-#!/bin/bash 
+#!/bin/bash
 #SBATCH --account=def-skelly
 
 # cpus anywhere
-#SBATCH --ntasks=21               
-#SBATCH --mem-per-cpu=6G      
+#SBATCH --ntasks=21
+#SBATCH --mem-per-cpu=6G
 #SBATCH --time=0-12:00  # time (DD-HH:MM)
 
 #SBATCH --mail-user=alinaqvi8014@gmail.com
 #SBATCH --mail-type=BEGIN,END,FAIL
-
-
-mkdir -p checkpoints
-mkdir -p logs
-
 #defaults
 mode=0 #Train:0, Replay:1, Debug:2
 seed_tpg=42
@@ -27,29 +22,42 @@ do
    esac
 done
 
+# Keep each configuration's outputs in its own experiment directory.
+experiment_name=$(basename "${parameters_file%.*}")
+experiment_dir="$TPG/experiments/$experiment_name"
+mkdir -p "$experiment_dir"/{checkpoints,frames,logs,plots}
+cd "$experiment_dir" || exit 1
+
 # Start from scratch ###########################################################
 if [ $mode -eq 0 ]; then
-  srun $TPG/build/release/experiments/TPGExperimentMPI \
-  parameters_file=${parameters_file} \
-  seed_tpg=${seed_tpg} \
-  1> logs/tpg.${seed_tpg}.$$.std \
-  2> logs/tpg.${seed_tpg}.$$.err
+  srun "$TPG/build/release/experiments/TPGExperimentMPI" \
+    "parameters_file=${parameters_file}" \
+    "seed_tpg=${seed_tpg}" \
+    1> "logs/tpg.${seed_tpg}.$$.std" \
+    2> "logs/tpg.${seed_tpg}.$$.err"
 fi
 
 # Pickup from checkpoint #######################################################
 if [ $mode -eq 4 ]; then
   checkpoint_in_phase=0
-  checkpoint_in_t=$(python3 "$TPG/scripts/run/latest-checkpoint.py" \
-    "$seed_tpg" --phase "$checkpoint_in_phase") || exit 1
+  checkpoint_files=(checkpoints/cp.*."${seed_tpg}"."${checkpoint_in_phase}".rslt)
+  if [ ! -e "${checkpoint_files[0]}" ]; then
+    echo "No checkpoint found for seed ${seed_tpg}, phase ${checkpoint_in_phase}" >&2
+    exit 1
+  fi
+  checkpoint_in_t=$(printf '%s\n' "${checkpoint_files[@]}" \
+    | sed -E 's#^.*/cp\.([0-9]+)\..*#\1#' \
+    | sort -n \
+    | tail -n 1)
   # Keep each resume attempt's logs; do not append to an arbitrary older job.
   pid=${SLURM_JOB_ID:-$$}
   echo "Starting run ${seed_tpg} t ${checkpoint_in_t} pid $pid"
-  srun $TPG/build/release/experiments/TPGExperimentMPI \
-    parameters_file=${parameters_file} \
-    seed_tpg=${seed_tpg} \
+  srun "$TPG/build/release/experiments/TPGExperimentMPI" \
+    "parameters_file=${parameters_file}" \
+    "seed_tpg=${seed_tpg}" \
     start_from_checkpoint=1 \
     checkpoint_in_phase=${checkpoint_in_phase} \
     checkpoint_in_t=${checkpoint_in_t} \
-    1>> logs/tpg.${seed_tpg}.${pid}.std \
-    2>> logs/tpg.${seed_tpg}.${pid}.err
+    1>> "logs/tpg.${seed_tpg}.${pid}.std" \
+    2>> "logs/tpg.${seed_tpg}.${pid}.err"
 fi
