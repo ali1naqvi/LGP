@@ -106,7 +106,8 @@ def experiment_configs(variant: str) -> tuple[str, str]:
 
 
 def run_stage(executable: Path, directory: Path, config: str, seed: int,
-              seed_aux: int, last_generation: int, processes: int) -> None:
+              seed_aux: int, last_generation: int, processes: int,
+              launcher: str = "mpirun") -> None:
     directory.mkdir(parents=True, exist_ok=True)
     for name in ("checkpoints", "logs", "frames", "plots"):
         (directory / name).mkdir(exist_ok=True)
@@ -117,7 +118,10 @@ def run_stage(executable: Path, directory: Path, config: str, seed: int,
     checkpoint = latest_checkpoint(directory / "checkpoints", seed)
     if checkpoint is not None and checkpoint >= last_generation:
         return
-    command = ["mpirun", "--oversubscribe", "-np", str(processes), str(executable),
+    launch_command = (["srun", "--ntasks", str(processes), "--kill-on-bad-exit=1"]
+                      if launcher == "srun" else
+                      ["mpirun", "--oversubscribe", "-np", str(processes)])
+    command = launch_command + [str(executable),
                f"parameters_file={config_path}", f"seed_tpg={seed}",
                f"seed_aux={seed_aux}", f"n_generations={last_generation}",
                "checkpoint_in_phase=0", "replay=0", "animate=0"]
@@ -168,7 +172,7 @@ def run_transfer(variant: str, seed: int, args: argparse.Namespace) -> None:
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     if args.fresh:
         run_stage(args.executable, pendulum_dir, pendulum_config, seed, args.seed_aux,
-                  GENERATION, args.processes)
+                  GENERATION, args.processes, args.launcher)
     # This is the full population saved after generation-1000 selection.
     if checkpoint_generation(source, seed) != GENERATION:
         raise ValueError(f"Transfer requires generation 1000: {source}")
@@ -180,7 +184,7 @@ def run_transfer(variant: str, seed: int, args: argparse.Namespace) -> None:
     if not transferred.exists():
         shutil.copy2(source, transferred)
     run_stage(args.executable, acrobot_dir, acrobot_config, seed, args.seed_aux,
-              args.generations, args.processes)
+              args.generations, args.processes, args.launcher)
     print(f"Completed {variant} seed {seed}", flush=True)
 
 
@@ -193,6 +197,8 @@ def main() -> None:
     parser.add_argument("--seed-aux", type=int, default=42, help="Simulator seed, matching Pendulum configs")
     parser.add_argument("--generations", type=int, default=5000, help="Last Acrobot generation")
     parser.add_argument("--processes", type=int, default=2, help="MPI processes per run")
+    parser.add_argument("--launcher", choices=("mpirun", "srun"), default="mpirun",
+                        help="Use srun inside a Slurm allocation")
     parser.add_argument("--jobs", type=int, default=1, help="Simultaneous runs; total MPI processes = jobs × processes")
     parser.add_argument("--executable", type=Path, default=ROOT / "build/release/experiments/TPGExperimentMPI")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "experiments")
@@ -206,14 +212,16 @@ def main() -> None:
         parser.error("--generations must exceed 1000")
     if args.processes < 2 or args.jobs < 1:
         parser.error("--processes must be at least 2 and --jobs at least 1")
+    if args.launcher == "srun" and args.jobs != 1:
+        parser.error("Use --jobs 1 with srun; use a Slurm array for concurrent seeds")
     selected_seeds = [args.seed] if args.seed is not None else (args.seeds or list(range(1, 21)))
     if len(set(selected_seeds)) != len(selected_seeds) or any(seed < 1 for seed in selected_seeds):
         parser.error("seeds must be distinct positive integers")
     args.output_dir = args.output_dir.resolve()
     args.source_dir = args.source_dir.resolve()
     args.executable = args.executable.resolve()
-    if not args.dry_run and (not args.executable.is_file() or shutil.which("mpirun") is None):
-        parser.error("Build TPGExperimentMPI from the updated source and ensure mpirun is available")
+    if not args.dry_run and (not args.executable.is_file() or shutil.which(args.launcher) is None):
+        parser.error(f"Build TPGExperimentMPI from the updated source and ensure {args.launcher} is available")
     variants = list(SOURCE_CONFIGS) if args.variant == "all" else [args.variant]
     jobs = [(variant, seed) for variant in variants for seed in selected_seeds]
     print(f"{len(jobs)} transfers; {args.jobs} simultaneous runs; {args.processes} MPI processes per run", flush=True)

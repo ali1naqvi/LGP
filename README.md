@@ -287,3 +287,41 @@ The second test compiles the engine and checks the generation boundary and
 population preservation against generation-1000 checkpoints for the three
 Pendulum variants. It also checks Acrobot's observation count, configurable
 episode budgets, and simulation steps.
+
+For an Alliance Slurm cluster, use the module environment you normally use to
+build and run TPG (including Python 3.10 or newer). Update the server copy of the
+repository and make sure its Pendulum experiment directories contain the
+generation-1000 checkpoints for seeds 1–20. Then submit from the repository root:
+
+```bash
+export TPG="$PWD"
+cmake --build build --config Release
+sbatch scripts/run/transfer-pendulum-acrobot.slurm fixed_rates
+```
+
+The Slurm file uses the existing `def-skelly` account, 21 MPI tasks per seed,
+6 GB per CPU, a 23-hour limit, and an array of seeds 1–20 with four running at once.
+It launches the Python driver once per seed; the driver starts the executable with
+`srun`. It does not launch a Python driver for every MPI rank.
+
+Submit the other variants separately for 20 runs each:
+
+```bash
+sbatch scripts/run/transfer-pendulum-acrobot.slurm fixed_individual
+sbatch scripts/run/transfer-pendulum-acrobot.slurm execution_modified_rates
+```
+
+Slurm stdout/stderr appear in the submission directory as
+`transfer-<array-job-id>_<seed>.out` and `.err`. Detailed experiment logs remain
+in each seed's `acrobot/logs` directory. Use `squeue -u "$USER"` to monitor jobs.
+Resubmit the same command after a timeout to resume from the latest complete
+checkpoint; finished seeds are skipped. Avoid submitting the same variant and
+seed twice concurrently.
+
+Resource and seed overrides can be passed to `sbatch` before the script path:
+
+```bash
+# Retry only seeds 3 and 7, or reduce the simultaneous seed count.
+sbatch --array=3,7 scripts/run/transfer-pendulum-acrobot.slurm fixed_rates
+sbatch --array=1-20%2 scripts/run/transfer-pendulum-acrobot.slurm fixed_rates
+```

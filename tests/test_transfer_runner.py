@@ -52,7 +52,8 @@ class TransferRunnerTest(unittest.TestCase):
         for variant in transfer.SOURCE_CONFIGS:
             with self.subTest(variant=variant), tempfile.TemporaryDirectory() as temporary:
                 args = argparse.Namespace(output_dir=Path(temporary), executable=Path('/test/binary'),
-                                          generations=1002, seed_aux=42, processes=2, dry_run=False, fresh=True)
+                                          generations=1002, seed_aux=42, processes=2, dry_run=False,
+                                          fresh=True, launcher='mpirun')
                 calls = []
 
                 def simulate(command, *, cwd, **kwargs):
@@ -90,10 +91,13 @@ class TransferRunnerTest(unittest.TestCase):
             source.write_text(saved)
             args = argparse.Namespace(output_dir=directory / 'outputs', source_dir=source_dir,
                                       executable=Path('/test/binary'), generations=1002,
-                                      seed_aux=42, processes=2, dry_run=False, fresh=False)
+                                      seed_aux=42, processes=21, dry_run=False, fresh=False, launcher='srun')
             calls = []
 
             def simulate(command, *, cwd, **kwargs):
+                self.assertEqual(command[:4], ['srun', '--ntasks', '21', '--kill-on-bad-exit=1'])
+                self.assertNotIn('mpirun', command)
+                self.assertNotIn('--oversubscribe', command)
                 settings = dict(value.split('=', 1) for value in command if '=' in value)
                 calls.append(settings)
                 self.assertEqual(cwd.name, 'acrobot')
