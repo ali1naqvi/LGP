@@ -152,6 +152,7 @@ class TPG {
 
 
     void ReadCheckpoint(long, int, bool, const string &);
+    void ResumeTrainingFromCheckpoint();
     
     void LinearCrossover(RegisterMachine* gp1, RegisterMachine* gp2,
                          RegisterMachine** c1, RegisterMachine** c2);

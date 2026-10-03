@@ -21,7 +21,16 @@
 TaskEnv* TaskEnvFactory::createTask(const std::string& name, std::unordered_map<std::string, std::any>& params) {
     static const std::map<std::string, CreatorFunc> registry = {
         {"Cartpole", [](std::unordered_map<std::string, std::any>&) { return new CartPole(); }},
-        {"Acrobot", [](std::unordered_map<std::string, std::any>&) { return new Acrobot(); }},
+        {"Acrobot", [](std::unordered_map<std::string, std::any>& params) {
+            auto value = [&params](const char* key, int fallback) {
+                auto it = params.find(key);
+                return it == params.end() ? fallback : std::any_cast<int>(it->second);
+            };
+            return new Acrobot(value("acrobot_max_timesteps", 500),
+                              value("acrobot_n_eval_train", 20),
+                              value("acrobot_n_eval_validation", 0),
+                              value("acrobot_n_eval_test", 100));
+        }},
         {"CartCentering", [](std::unordered_map<std::string, std::any>&) { return new CartCentering(); }},
         {"Pendulum", [](std::unordered_map<std::string, std::any>& params) {
             auto value = [&params](const char* key, int fallback) {

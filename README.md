@@ -229,3 +229,61 @@ ordinary scalar-register capacity. New checkpoints carry an `SL4` layout marker;
 legacy self-modifying checkpoints cannot be resumed or replayed with this build.
 Use fresh runs for comparisons: existing logs still reflect the previous engine.
 Selection and replay CSVs no longer emit redundancy-rate columns.
+
+### Pendulum to Acrobot transfer
+
+Rebuild `TPGExperimentMPI` from the updated source before running transfers:
+
+```bash
+cmake --build build --config Release
+python3 scripts/run/transfer_pendulum_to_acrobot.py fixed_rates
+```
+
+The runner defaults to evolutionary seeds 1–20 and simulator seed 42. Each run
+loads the existing full-population training checkpoint at generation 1000, then
+evaluates the full surviving population on Acrobot at generation 1001 and continues
+through generation 5000. For `fixed_rates`, the source is
+`experiments/pendulum_fixed_rates_no_limit/checkpoints/cp.1000.<seed>.0.rslt`.
+The fixed-individual source is `pendulum_fixed_individual_all`, and the
+execution-modified source is `pendulum_execution_modified_rates_no_limit`. The first
+Acrobot evaluation establishes fitness before further reproduction. The source
+mutation settings, constants, state flags, and inherited mutation rates are
+preserved; register bounds match the saved population rather than the edited YAML.
+Acrobot receives four observations and uses its own torque bounds.
+Pendulum uses 200 steps and Acrobot uses 500 steps per episode. Both use
+20 training episodes and 5 validation episodes. Validation
+runs every 100 generations with separate episode seeds. The archived fixed-rate
+Pendulum generation-1000 checkpoints contain vector operations; the fixed-individual
+and execution-modified checkpoints for seeds 1–20 contain only scalar instructions.
+Inherited instructions are retained exactly, including vector instructions. The
+Acrobot config disables creation of new vector/matrix operations. Use `--fresh`
+to train new scalar-only Pendulum source populations through generation 1000 instead.
+
+Use `fixed_individual` or `execution_modified_rates` for the other variants, or
+`all` for 20 runs of each variant (60 transfers). `--seed 2` selects one run,
+`--seeds 1 2 3` selects a subset, and `--jobs 4 --processes 2` launches four runs
+at once using eight MPI processes. `--generations 2000` ends Acrobot at generation
+2000; this is an absolute generation number. `--dry-run` prints the plan.
+`--source-dir` selects another directory containing the Pendulum experiments.
+Every requested source checkpoint is checked before any Acrobot run is launched.
+
+Outputs are saved under
+`experiments/pendulum_to_acrobot_<variant>/seed_<seed>/acrobot`; a `pendulum`
+subdirectory is used only with `--fresh`. Source checkpoints are copied and their
+hashes recorded; the original Pendulum experiment files are not modified.
+Rerunning the same command resumes completed checkpoints and skips completed
+stages. Each run records its configs and transfer settings, and every launch gets
+separate logs. A changed config or simulator seed is rejected for an existing run;
+choose a new `--output-dir` for a different experiment.
+
+Transfer verification:
+
+```bash
+python3 -m unittest discover -s tests -p test_transfer_runner.py
+python3 scripts/run/test_checkpoint_transfer.py
+```
+
+The second test compiles the engine and checks the generation boundary and
+population preservation against generation-1000 checkpoints for the three
+Pendulum variants. It also checks Acrobot's observation count, configurable
+episode budgets, and simulation steps.

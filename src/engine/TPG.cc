@@ -4157,6 +4157,15 @@ void TPG::ReadCheckpoint(long t, int phase, bool fromString,
 }
 
 /******************************************************************************/
+void TPG::ResumeTrainingFromCheckpoint() {
+   ReadCheckpoint(GetParam<int>("checkpoint_in_t"),
+                  GetParam<int>("checkpoint_in_phase"), false, "");
+   // ReadCheckpoint restores the saved generation. Training starts after it;
+   // the first evaluation establishes fitness for the restored population.
+   state_["t_current"] = GetState("t_start");
+   state_["phase"] = _TRAIN_PHASE;
+}
+
 void TPG::recalculateProgramRefs() {
    for (auto p : program_pop_)
       p.second->nrefs_ = 0;

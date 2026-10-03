@@ -9,8 +9,7 @@ TrainingRunner::TrainingRunner(TPG& tpg, std::vector<TaskEnv*>& tasks,
 
 void TrainingRunner::initialization() {
    if (tpg_.GetParam<int>("start_from_checkpoint")) {
-      tpg_.ReadCheckpoint(tpg_.GetParam<int>("checkpoint_in_t"),
-                          tpg_.GetParam<int>("checkpoint_in_phase"), false, "");
+      tpg_.ResumeTrainingFromCheckpoint();
    } else {
       tpg_.InitTeams();
    }
