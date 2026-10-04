@@ -190,7 +190,9 @@ def run_transfer(variant: str, seed: int, args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("variant", choices=[*SOURCE_CONFIGS, "all"])
+    parser.add_argument("variant", nargs="?", default="execution_modified_rates",
+                        choices=[*SOURCE_CONFIGS, "all"],
+                        help="Mutation variant (default: execution_modified_rates)")
     seeds = parser.add_mutually_exclusive_group()
     seeds.add_argument("--seed", type=int, help="Run one seed")
     seeds.add_argument("--seeds", type=int, nargs="+", help="Selected seeds (default: 1–20)")

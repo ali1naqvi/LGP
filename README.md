@@ -236,10 +236,13 @@ Rebuild `TPGExperimentMPI` from the updated source before running transfers:
 
 ```bash
 cmake --build build --config Release
-python3 scripts/run/transfer_pendulum_to_acrobot.py fixed_rates
+python3 scripts/run/transfer_pendulum_to_acrobot.py execution_modified_rates
 ```
 
-The runner defaults to evolutionary seeds 1–20 and simulator seed 42. Each run
+The runner defaults to execution-modified mutation rates, evolutionary seeds
+1–20, and simulator seed 42. This variant uses `self_modifying: 1` and
+`reset_self_modifying_before_mutation: 0`, so parent execution outputs control
+offspring mutation rates. Each run
 loads the existing full-population training checkpoint at generation 1000, then
 evaluates the full surviving population on Acrobot at generation 1001 and continues
 through generation 5000. For `fixed_rates`, the source is
@@ -259,7 +262,7 @@ Inherited instructions are retained exactly, including vector instructions. The
 Acrobot config disables creation of new vector/matrix operations. Use `--fresh`
 to train new scalar-only Pendulum source populations through generation 1000 instead.
 
-Use `fixed_individual` or `execution_modified_rates` for the other variants, or
+Use `fixed_individual` or `fixed_rates` for the other variants, or
 `all` for 20 runs of each variant (60 transfers). `--seed 2` selects one run,
 `--seeds 1 2 3` selects a subset, and `--jobs 4 --processes 2` launches four runs
 at once using eight MPI processes. `--generations 2000` ends Acrobot at generation
@@ -296,7 +299,7 @@ generation-1000 checkpoints for seeds 1–20. Then submit from the repository ro
 ```bash
 export TPG="$PWD"
 cmake --build build --config Release
-sbatch scripts/run/transfer-pendulum-acrobot.slurm fixed_rates
+sbatch scripts/run/transfer-pendulum-acrobot.slurm execution_modified_rates
 ```
 
 The Slurm file uses the existing `def-skelly` account, 21 MPI tasks per seed,
@@ -308,7 +311,7 @@ Submit the other variants separately for 20 runs each:
 
 ```bash
 sbatch scripts/run/transfer-pendulum-acrobot.slurm fixed_individual
-sbatch scripts/run/transfer-pendulum-acrobot.slurm execution_modified_rates
+sbatch scripts/run/transfer-pendulum-acrobot.slurm fixed_rates
 ```
 
 Slurm stdout/stderr appear in the submission directory as
@@ -325,3 +328,59 @@ Resource and seed overrides can be passed to `sbatch` before the script path:
 sbatch --array=3,7 scripts/run/transfer-pendulum-acrobot.slurm fixed_rates
 sbatch --array=1-20%2 scripts/run/transfer-pendulum-acrobot.slurm fixed_rates
 ```
+
+### Test replay of standalone Acrobot agents
+
+For a local run inside the Linux development container, use:
+
+```bash
+bash scripts/run/acrobot-test-replay.sh
+```
+
+This rebuilds `TPGExperimentMPI`, prepares the selections, runs and collects
+the test episodes, and generates the Acrobot plot. Rebuilding is needed for
+the executable to use Acrobot's configurable episode and timestep limits.
+The script stops immediately if building or replaying fails.
+
+The replay workflow evaluates the training champion in each run's final
+available checkpoint for `acrobot_execution_modified_rates`,
+`acrobot_fixed_individual`, and `acrobot_fixed_rates`. It includes all 20 seeds
+per variant, including runs that ended early, and records their actual
+generation and team ID in the manifest and score CSVs. Each agent receives
+20 test episodes with a 500-step limit and the separate test seed offset.
+
+On the Alliance server, use the module environment used to build the executable
+and submit from the repository root:
+
+```bash
+export TPG="$PWD"
+python3 scripts/replay_test_table.py prepare --environment Acrobot
+sbatch scripts/run/acrobot-test-replay.slurm
+```
+
+The array contains 60 jobs, runs at most eight at once, and uses one MPI process
+per replay. Prepare the manifest before submitting and keep it unchanged while
+the array runs. Completed JSON results are skipped on resubmission.
+
+After all array jobs finish:
+
+```bash
+python3 scripts/replay_test_table.py collect --environment Acrobot --episodes 20
+python3 scripts/plot/plot_test_boxplots.py --environment Acrobot
+```
+
+Results are saved under `output/test_replay/`:
+
+- `acrobot_test_seed_scores.csv`: one row per run, with test mean, median,
+  standard deviation, generation, and team ID.
+- `acrobot_test_episode_scores.csv`: the 20 individual episode returns per run.
+- `acrobot_test_table_summary.csv`: a summary for each mutation variant.
+- `acrobot_test_score_boxplots.pdf` and `.png`: the standalone Acrobot plot.
+- `jobs/` and `logs/`: resumable replay results and evaluator stdout/stderr.
+
+The collector recovers individual episode returns from the classic-control
+replay evaluator's cumulative reward output. Acrobot score CSVs are written
+separately so collecting them preserves the existing tasks' score files.
+Copy the `acrobot_test_*` files back to the local `output/test_replay/` directory.
+Running `python3 scripts/plot/plot_test_boxplots.py` without an environment filter
+combines Acrobot with any other available test results.

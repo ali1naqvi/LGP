@@ -17,7 +17,7 @@ set -euo pipefail
 : "${TPG:?Export TPG to the repository path before submitting}"
 : "${SLURM_ARRAY_TASK_ID:?Submit this file with sbatch as an array}"
 : "${SLURM_NTASKS:?Missing Slurm MPI task count}"
-variant=${1:-fixed_rates}
+variant=${1:-execution_modified_rates}
 last_generation=${2:-5000}
 case "$variant" in
     fixed_rates|fixed_individual|execution_modified_rates) ;;
