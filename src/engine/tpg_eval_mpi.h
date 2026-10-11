@@ -287,6 +287,8 @@ inline void replayer(TPG &tpg, vector<TaskEnv *> &tasks) {
           }
       }
 
+      tpg.rate_sensitivity_.Analyze(tpg, eval_data);
+
       // tpg.printGraphDotGPTPXXI(eval_data.tm->id_, teams_visitedAllTasks,
       //                         teamUseMapPerTask, steps_per_task);
 

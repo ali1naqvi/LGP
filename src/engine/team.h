@@ -40,6 +40,9 @@ class team {
   inline void addEvalSeed(int s) { evalSeeds_.push_back(s); }
   inline void clearEvalSeeds() { evalSeeds_.clear(); }
   void InitMemory(map<long, team *> &, std::unordered_map<std::string, std::any> &params);
+  // Episode-start memory reset for one program, as applied by InitMemory.
+  static void InitProgramMemory(RegisterMachine *prog,
+                                std::unordered_map<std::string, std::any> &params);
   inline void getAncestorIds(vector<long> &a) { a = ancestorIds_; }
   inline void setAncestorIds(vector<long> &a) { ancestorIds_ = a; }
   inline int numAncestorIds() { return ancestorIds_.size(); }

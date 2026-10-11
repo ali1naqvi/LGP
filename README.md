@@ -329,6 +329,107 @@ sbatch --array=3,7 scripts/run/transfer-pendulum-acrobot.slurm fixed_rates
 sbatch --array=1-20%2 scripts/run/transfer-pendulum-acrobot.slurm fixed_rates
 ```
 
+### MountainCarContinuous to Pendulum transfer
+
+Reuse the full-population MountainCarContinuous training checkpoints at generation
+2000 (2,001 generations numbered 0–2000). Pendulum starts at generation 2001 and
+finishes at generation 3000, giving exactly 1,000 Pendulum generations. The first
+Pendulum generation evaluates the restored population before reproduction.
+
+```bash
+cmake --build build --config Release
+python3 scripts/run/transfer_mountaincar_to_pendulum.py execution_modified_rates
+# Check all 60 source checkpoints and print the plan without running training:
+python3 scripts/run/transfer_mountaincar_to_pendulum.py all --dry-run
+```
+
+The three variants are `execution_modified_rates` (default), `fixed_individual`,
+and `fixed_rates`, using seeds 1–20 and simulator seed 42. Sources are
+`experiments/mountaincar_continuous_<variant>/checkpoints/cp.2000.<seed>.0.rslt`.
+The runner preserves the full population, inherited instructions, constants,
+state flags, and mutation settings. Register bounds match the saved population;
+new vector/matrix instructions are disabled. Pendulum uses three observations,
+torque in [-2, 2], 200 steps per episode, 20 training episodes, and 5 validation
+episodes every 100 generations with separate episode seeds; testing is disabled.
+
+Outputs go to
+`experiments/mountaincar_continuous_to_pendulum_<variant>/seed_<seed>/pendulum`.
+Sources are copied and hashed without modifying the original experiments.
+Rerunning resumes the latest complete checkpoint and skips completed runs;
+changed configs or simulator seeds require a different `--output-dir`.
+`--seed`, `--seeds`, `--jobs`, `--processes`, and `--source-dir` work like the
+Pendulum-to-Acrobot runner. `--generations` is the absolute final generation
+(default 3000), so `--generations 2500` gives 500 Pendulum generations.
+`--fresh` instead trains new scalar-only MountainCarContinuous populations through
+generation 2000 before transferring.
+
+On Slurm, submit from the repository root with the normal build/run module
+environment and the generation-2000 source checkpoints installed:
+
+```bash
+export TPG="$PWD"
+cmake --build build --config Release
+sbatch scripts/run/transfer-mountaincar-pendulum.slurm execution_modified_rates
+sbatch scripts/run/transfer-mountaincar-pendulum.slurm fixed_individual
+sbatch scripts/run/transfer-mountaincar-pendulum.slurm fixed_rates
+```
+
+Each submission runs seeds 1–20, four at once, with 21 MPI tasks per seed,
+6 GB per CPU, and a 23-hour limit using `def-skelly`. Python launches once per
+seed and starts MPI with `srun`. Resubmit after a timeout to resume; finished
+seeds are skipped. Slurm logs are named
+`transfer-mountaincar-pendulum-<array-job-id>_<seed>.out` and `.err`.
+An optional second script argument sets the absolute final generation.
+
+Runner verification:
+
+```bash
+python3 -m unittest discover -s tests -p 'test*transfer_runner.py'
+```
+
+### MountainCarContinuous to Acrobot transfer
+
+Take the existing full-population MountainCarContinuous checkpoint at generation
+2000 and train Acrobot for **5,000 additional generations**, numbered 2001–7000.
+Mountain Car is not retrained by default. The first Acrobot generation evaluates
+the restored population before reproduction.
+
+```bash
+cmake --build build --config Release
+python3 scripts/run/transfer_mountaincar_to_acrobot.py execution_modified_rates
+# Validate all 60 source checkpoints without launching training:
+python3 scripts/run/transfer_mountaincar_to_acrobot.py all --dry-run
+```
+
+This uses the same Mountain Car source experiments, three mutation variants,
+seeds 1–20, simulator seed 42, population preservation, scalar mutation settings,
+and resume safeguards as the MountainCarContinuous-to-Pendulum runner.
+Acrobot uses four observations, torque in [-1, 1], 500 steps per episode,
+20 training episodes, and 5 validation episodes every 100 generations with
+separate episode seeds; testing is disabled. Outputs go to
+`experiments/mountaincar_continuous_to_acrobot_<variant>/seed_<seed>/acrobot`.
+
+For Slurm, use the normal build/run module environment and submit from the
+repository root:
+
+```bash
+export TPG="$PWD"
+cmake --build build --config Release
+sbatch scripts/run/transfer-mountaincar-acrobot.slurm execution_modified_rates
+sbatch scripts/run/transfer-mountaincar-acrobot.slurm fixed_individual
+sbatch scripts/run/transfer-mountaincar-acrobot.slurm fixed_rates
+```
+
+Each submission runs seeds 1–20, four at once, with 21 MPI tasks per seed,
+6 GB per CPU, and a 23-hour limit using `def-skelly`. Resubmit after a timeout
+to resume; completed seeds are skipped. Slurm logs are named
+`transfer-mountaincar-acrobot-<array-job-id>_<seed>.out` and `.err`.
+`--generations` (or the optional second Slurm script argument) is the absolute
+final generation, default 7000; setting it to 5000 gives 3,000 Acrobot generations.
+The runner also supports `--seed`, `--seeds`, `--jobs`, `--processes`,
+`--source-dir`, `--output-dir`, and the explicit `--fresh` option for new sources.
+Verify with the same `test*transfer_runner.py` unittest command above.
+
 ### Test replay of standalone Acrobot agents
 
 For a local run inside the Linux development container, use:

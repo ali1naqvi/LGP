@@ -68,39 +68,45 @@ string team::ToString() const {
 
 
 /******************************************************************************/
+void team::InitProgramMemory(RegisterMachine* prog,
+                             std::unordered_map<std::string, std::any>& params) {
+   const auto reset_setting = params.find("reset_self_modifying_per_episode");
+   const bool reset_self_modifying = reset_setting != params.end() &&
+       std::any_cast<int>(reset_setting->second) != 0;
+   const bool use_self_modifying_constants = prog->self_modifying_;
+   auto program_params = params;
+   program_params["self_modifying"] =
+       use_self_modifying_constants ? 1 : 0;
+   if (use_self_modifying_constants ||
+       !isEqual(std::any_cast<double>(params["p_memory_mu_const"]), 0.0)) {
+      prog->use_evolved_const_ = true;
+      prog->ConfigureSelfModifyingRegisters(program_params, false);
+      if (use_self_modifying_constants) {
+         // Preserve the preceding episode's phenotype unless the episode
+         // reset ablation is enabled. Seeding explicitly also resets rate
+         // registers marked stateful, without changing their step behavior.
+         prog->CopyPrivateConstToWorkingMemoryPreservingSelfModifyingRegisters();
+         if (reset_self_modifying) {
+            prog->SeedSelfModifyingWorkingFromConstants(program_params);
+         }
+      } else {
+         prog->CopyPrivateConstToWorkingMemory();
+      }
+   } else {
+      // Initialize working memory with zeros
+      prog->use_evolved_const_ = false;
+      prog->ClearWorkingMemory();
+   }
+}
+
+/******************************************************************************/
 void team::InitMemory(map<long, team*>& teamMap,
                       std::unordered_map<std::string, std::any>& params) {
    set<team*, teamIdComp> teams;
    set<RegisterMachine*, RegisterMachineIdComp> RegisterMachines;
    GetAllNodes(teamMap, teams, RegisterMachines);
-   const auto reset_setting = params.find("reset_self_modifying_per_episode");
-   const bool reset_self_modifying = reset_setting != params.end() &&
-       std::any_cast<int>(reset_setting->second) != 0;
    for (auto prog : RegisterMachines) {
-      const bool use_self_modifying_constants = prog->self_modifying_;
-      auto program_params = params;
-      program_params["self_modifying"] =
-          use_self_modifying_constants ? 1 : 0;
-      if (use_self_modifying_constants ||
-          !isEqual(std::any_cast<double>(params["p_memory_mu_const"]), 0.0)) {
-         prog->use_evolved_const_ = true;
-         prog->ConfigureSelfModifyingRegisters(program_params, false);
-         if (use_self_modifying_constants) {
-            // Preserve the preceding episode's phenotype unless the episode
-            // reset ablation is enabled. Seeding explicitly also resets rate
-            // registers marked stateful, without changing their step behavior.
-            prog->CopyPrivateConstToWorkingMemoryPreservingSelfModifyingRegisters();
-            if (reset_self_modifying) {
-               prog->SeedSelfModifyingWorkingFromConstants(program_params);
-            }
-         } else {
-            prog->CopyPrivateConstToWorkingMemory();
-         }
-      } else {
-         // Initialize working memory with zeros
-         prog->use_evolved_const_ = false;
-         prog->ClearWorkingMemory();
-      }
+      InitProgramMemory(prog, params);
    }
       if(std::any_cast<int>(params["reset_per_episode"]) == 1){
          for (auto* t : teams) {

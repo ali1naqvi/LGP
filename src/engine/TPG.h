@@ -17,6 +17,7 @@
 #include "state.h"
 #include "team.h"
 #include "EvalData.h"
+#include "RateSensitivity.h"
 #include "sequence_comparisons.h"
 
 #define NUM_RNG 2
@@ -89,6 +90,7 @@ class TPG {
     int genUniqueProgram(RegisterMachine *, set<RegisterMachine *, RegisterMachineIdComp>);
     void GetAction(EvalData& eval_data, std::mt19937& rng, std::unordered_map<std::string, std::any>& params, std::tuple<long, double, double>& prev_prog_history);
     void LogReplaySelfModifyingRates(const EvalData& eval_data);
+    RateSensitivity rate_sensitivity_;
     //TD ERROR
     void ComputeIndReward(EvalData& eval_data, std::unordered_map<string, std::any> &params, double reward_per_step);
 

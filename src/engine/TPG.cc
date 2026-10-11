@@ -130,7 +130,9 @@ void TPG::clearMemory() {
 void TPG::GetAction(EvalData& eval_data, std::mt19937& rng, std::unordered_map<std::string, std::any>& params, std::tuple<long, double, double>& prev_prog_history){
   eval_data.instruction_count = 0;
   eval_data.team_path.clear();
+  rate_sensitivity_.BeforeStep(*this, eval_data);
   eval_data.tm->GetAction(eval_data, rng, params, prev_prog_history);
+  rate_sensitivity_.AfterStep(*this, eval_data);
 }
 
 
@@ -1956,6 +1958,11 @@ void TPG::SetParams(int argc, char** argv) {
    params_["reset_self_modifying_per_episode"] = 0;
    // Optional replay-only episode limit; 0 preserves each task's default.
    params_["replay_max_timesteps"] = 0;
+   // Replay-only observation-to-mutation-rate sensitivity (RateSensitivity.h).
+   params_["rate_sensitivity"] = 0;
+   params_["rate_sensitivity_fractions"] = std::string("0.01,0.05,0.1");
+   // Maximum carried-over steps per perturbation; 0 follows to the end.
+   params_["rate_sensitivity_carry_horizon"] = 0;
    if (argc > 1) {
       for (int i = 1; i < argc; ++i) {
          std::string arg = argv[i];
