@@ -1,5 +1,5 @@
 # Source files for the TPG library
-file(GLOB TPG_SOURCES
+file(GLOB TPG_SOURCES CONFIGURE_DEPENDS
     *.cc
     *.h
 )
