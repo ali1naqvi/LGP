@@ -16,6 +16,7 @@ from pathlib import Path
 
 from transfer_pendulum_to_acrobot import (
     completed_checkpoint, checkpoint_generation, match_checkpoint_registers, run_stage,
+    training_only_config,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -36,7 +37,7 @@ def source_checkpoint(variant: str, seed: int, source_dir: Path) -> Path:
 
 def experiment_configs(variant: str) -> tuple[str, str]:
     source = ROOT / "configs" / f"{SOURCE_CONFIGS[variant]}.yaml"
-    mountaincar = source.read_text()
+    mountaincar = training_only_config(source.read_text())
     # Existing checkpoint instructions are retained; mutations create scalar ops only.
     mountaincar = re.sub(
         r"^(  )(?:# )?((?:VECTOR_|MATRIX_|SCALAR_VECTOR_|SCALAR_MATRIX_|SCALAR_BROADCAST_OP|OBS_BUFF_SLICE_OP)[A-Z_]*):.*$",

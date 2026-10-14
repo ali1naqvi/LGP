@@ -349,8 +349,9 @@ and `fixed_rates`, using seeds 1–20 and simulator seed 42. Sources are
 The runner preserves the full population, inherited instructions, constants,
 state flags, and mutation settings. Register bounds match the saved population;
 new vector/matrix instructions are disabled. Pendulum uses three observations,
-torque in [-2, 2], 200 steps per episode, 20 training episodes, and 5 validation
-episodes every 100 generations with separate episode seeds; testing is disabled.
+torque in [-2, 2], 200 steps per episode, and 20 training episodes. Generated
+transfer configs disable validation and testing (both scheduling and episode
+budgets), including Mountain Car training when `--fresh` is used.
 
 Outputs go to
 `experiments/mountaincar_continuous_to_pendulum_<variant>/seed_<seed>/pendulum`.
@@ -379,7 +380,9 @@ Each submission runs seeds 1–20, four at once, with 21 MPI tasks per seed,
 seed and starts MPI with `srun`. Resubmit after a timeout to resume; finished
 seeds are skipped. Slurm logs are named
 `transfer-mountaincar-pendulum-<array-job-id>_<seed>.out` and `.err`.
-An optional second script argument sets the absolute final generation.
+An optional second script argument sets the absolute final generation. Additional
+arguments after it are forwarded to the Python runner, for example
+`3000 --fresh --output-dir "$TPG/experiments/training_only_v1"`.
 
 Runner verification:
 
@@ -405,8 +408,8 @@ This uses the same Mountain Car source experiments, three mutation variants,
 seeds 1–20, simulator seed 42, population preservation, scalar mutation settings,
 and resume safeguards as the MountainCarContinuous-to-Pendulum runner.
 Acrobot uses four observations, torque in [-1, 1], 500 steps per episode,
-20 training episodes, and 5 validation episodes every 100 generations with
-separate episode seeds; testing is disabled. Outputs go to
+20 training episodes, and no validation or test episodes. Generated configs also
+disable validation and testing for fresh Mountain Car source training. Outputs go to
 `experiments/mountaincar_continuous_to_acrobot_<variant>/seed_<seed>/acrobot`.
 
 For Slurm, use the normal build/run module environment and submit from the
@@ -429,6 +432,30 @@ final generation, default 7000; setting it to 5000 gives 3,000 Acrobot generatio
 The runner also supports `--seed`, `--seeds`, `--jobs`, `--processes`,
 `--source-dir`, `--output-dir`, and the explicit `--fresh` option for new sources.
 Verify with the same `test*transfer_runner.py` unittest command above.
+
+To redo both Mountain Car transfer pipelines without any validation history,
+copy the updated source to the cluster, load the normal build/run modules, and
+submit fresh runs into a new output directory:
+
+```bash
+export TPG="$PWD"
+cmake --build build --config Release
+for variant in execution_modified_rates fixed_individual fixed_rates; do
+  sbatch scripts/run/transfer-mountaincar-acrobot.slurm "$variant" 7000 \
+    --fresh --output-dir "$TPG/experiments/training_only_v1"
+  sbatch scripts/run/transfer-mountaincar-pendulum.slurm "$variant" 3000 \
+    --fresh --output-dir "$TPG/experiments/training_only_v1"
+done
+```
+
+Each pipeline trains its own fresh scalar-only Mountain Car population through
+generation 2000 before transferring. Acrobot then runs 2001–7000; Pendulum runs
+2001–3000. This does not reuse the old source populations or their inherited
+vector/matrix instructions. Use a previously unused output directory for a new
+attempt; resubmitting with that same directory resumes the new attempt. Omitting
+`--fresh` instead reuses the existing Mountain Car source checkpoint, including
+any history of validation affecting its evolution. Historical result files are
+not modified by these runners.
 
 ### Test replay of standalone Acrobot agents
 

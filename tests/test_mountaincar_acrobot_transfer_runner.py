@@ -37,10 +37,16 @@ class MountainCarAcrobotTransferRunnerTest(unittest.TestCase):
             self.assertIn('n_input: "4"', acrobot)
             self.assertIn('n_generations: 2000', mountaincar)
             self.assertIn('n_generations: 7000', acrobot)
-            self.assertIn('acrobot_n_eval_validation: 5', acrobot)
+            self.assertIn('acrobot_n_eval_validation: 0', acrobot)
             self.assertIn('mountaincar_continuous_max_timesteps: 200', mountaincar)
             self.assertIn('acrobot_max_timesteps: 500', acrobot)
             for content in (mountaincar, acrobot):
+                self.assertIn('validation_mod: 0', content)
+                self.assertIn('test_mod: 0', content)
+                budgets = re.findall(r'^  \w+_n_eval_(?:validation|val|test): (\d+)', content, re.MULTILINE)
+                self.assertTrue(budgets)
+                self.assertEqual(set(budgets), {'0'})
+                self.assertRegex(content, r'_n_eval_train: 20\b')
                 enabled = re.findall(r'^  (\w+_OP): 1\b', content, re.MULTILINE)
                 self.assertTrue(enabled)
                 self.assertTrue(all(name.startswith('SCALAR_') and 'VECTOR' not in name and 'MATRIX' not in name

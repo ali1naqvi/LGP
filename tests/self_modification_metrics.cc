@@ -1,4 +1,5 @@
 #include "RegisterMachine.h"
+#include "TPG.h"
 #include "XPredPreyLogging.h"
 #include <iostream>
 #include <stdexcept>
@@ -49,6 +50,28 @@ int main() {
    check(program.instructions_effective_.size() == 2, "Only action and active-rate writes should survive");
    check(program.n_self_modification_only_instructions_ == 1, "Only active-rate instruction is self-modification-only");
    check(program.ToString(false).find(":SM1:SL4:") != std::string::npos, "Checkpoint must identify the new layout");
+   // Held-out MPI results must not change the rates used by reproduction.
+   TPG tpg;
+   tpg.program_pop_[program.id_] = &program;
+   const auto training_rates = program.MutationProbabilities(params);
+   const double training_decoy = scalar->working_memory_[6](0, 0);
+   std::string held_out = "R:" + std::to_string(program.id_) + ":-1:-2:-3:-4:-5\n";
+   std::vector<team*> no_teams;
+   for (int phase : {_VALIDATION_PHASE, _TEST_PHASE}) {
+      tpg.state_["phase"] = phase;
+      tpg.DecodeEvalResultString(held_out);
+      check(program.MutationProbabilities(params) == training_rates,
+            "Held-out results changed training mutation probabilities");
+      check(scalar->working_memory_[6](0, 0) == training_decoy,
+            "Held-out results changed training decoy");
+      std::string result = "fitness\n";
+      tpg.AppendSelfModifyingRates(result, no_teams);
+      check(result == "fitness\n", "Held-out sender changed result payload");
+   }
+   tpg.state_["phase"] = _TRAIN_PHASE;
+   tpg.DecodeEvalResultString(held_out);
+   check(scalar->working_memory_[4](0, 0) == -3,
+         "Training results must still update mutation registers");
    check(XPredPreyReproductionHeader().find("redundancy") == std::string::npos, "No obsolete logging column");
    // A legacy config key cannot re-enable duplication, even at probability one.
    params["self_modifying"] = 0;

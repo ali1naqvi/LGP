@@ -24,6 +24,15 @@ SOURCE_CONFIGS = {
 GENERATION = 1000
 
 
+def training_only_config(config: str) -> str:
+    """Disable held-out scheduling and episode budgets in a generated config."""
+    return re.sub(
+        r'^  (validation_mod|test_mod|\w+_n_eval_(?:validation|val|test)):.*$',
+        r'  \1: 0  # Training-only transfer: held-out evaluation disabled',
+        config, flags=re.MULTILINE,
+    )
+
+
 def completed_checkpoint(path: Path) -> bool:
     if not path.is_file():
         return False

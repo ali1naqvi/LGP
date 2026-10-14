@@ -4608,6 +4608,8 @@ void TPG::EncodeEvalResultString(EvalData& eval_data) {
 
 void TPG::AppendSelfModifyingRates(std::string& result,
                                    std::vector<team*>& teams) {
+   // Held-out episodes must not overwrite the training population's rates.
+   if (GetState("phase") != _TRAIN_PHASE) return;
    set<team*, teamIdComp> visited_teams;
    set<RegisterMachine*, RegisterMachineIdComp> programs;
    for (auto* tm : teams) {
@@ -4744,9 +4746,9 @@ void TPG::DecodeEvalResultString(std::string& s) {
       vector<int> r_stats_int;
       SplitString(line, ':', split_str);
       if (!split_str.empty() && split_str[0] == "R" && split_str.size() > 2) {
-         // Held-out XPredPrey encounters operate on the worker copy only.
-         // Defend at the receiver too, even if a worker sends rate records.
-         if (!UsesXPredPreyCoevolution() || GetState("phase") == _TRAIN_PHASE) {
+         // Defend at the receiver too, including records from older workers.
+         // Validation/test outputs must never feed subsequent reproduction.
+         if (GetState("phase") == _TRAIN_PHASE) {
             RestoreSelfModifyingRates(split_str);
          }
          continue;

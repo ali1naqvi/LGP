@@ -12,7 +12,7 @@
 set -euo pipefail
 
 # Submit from the same loaded module environment used to build TPGExperimentMPI.
-# Usage: sbatch scripts/run/transfer-mountaincar-pendulum.slurm [variant] [last_generation]
+# Usage: sbatch scripts/run/transfer-mountaincar-pendulum.slurm [variant] [last_generation] [runner options...]
 # Each array task transfers the matching MountainCarContinuous checkpoint for one seed.
 : "${TPG:?Export TPG to the repository path before submitting}"
 : "${SLURM_ARRAY_TASK_ID:?Submit this file with sbatch as an array}"
@@ -23,10 +23,8 @@ case "$variant" in
     fixed_rates|fixed_individual|execution_modified_rates) ;;
     *) echo "Unknown variant: $variant" >&2; exit 2 ;;
 esac
-if (( $# > 2 )); then
-    echo "Usage: sbatch $0 [variant] [last_generation]" >&2
-    exit 2
-fi
+# Forward options such as --fresh and --output-dir after the two positionals.
+if (( $# >= 2 )); then shift 2; elif (( $# == 1 )); then shift; fi
 
 export OMP_NUM_THREADS=1
 cd "$TPG"
@@ -37,4 +35,4 @@ python3 "$TPG/scripts/run/transfer_mountaincar_to_pendulum.py" "$variant" \
     --launcher srun \
     --processes "$SLURM_NTASKS" \
     --jobs 1 \
-    --generations "$last_generation"
+    --generations "$last_generation" "$@"
