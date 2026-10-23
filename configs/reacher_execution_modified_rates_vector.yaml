@@ -32,7 +32,8 @@ ga_parameters:
   parent_select_roots_only: 0  # Whether to constrain parent selection to root teams
   tournament_size: 3  # Tournament size for selection
   shadow_run: 0  # Randomly select training survivors (uses seed_tpg)
-  keep_old_outcomes: 1  # Whether to keep evaluation outcome over time or re-evaluate each generation
+  keep_old_outcomes: 1  # Accumulate training scores across the policy lifetime
+  training_episode_lifetime_cap: 200  # Stop training evaluation after 200 episodes
   seed_with_episode_number: 1  # Same episode seeds across candidate policies
   extinction_event_occurance: 1000000000 #TODO(ali): not working as of rn
   extinction_percentage: 0 #percent to keep during extinction event
@@ -168,7 +169,7 @@ mujoco_parameters:
   mj_model_path: "$TPG/datasets/mujoco_models/"  # Model path
   mj_max_timestep: 50  # Episode limit in control steps
   mj_reward_control_weight: 0.0
-  mj_n_eval_train: 5  # Number of train episodes
+  mj_n_eval_train: 20  # Fresh training episodes per generation
   mj_n_eval_validation: 20  # Number of validation episodes
   mj_n_eval_test: 0  # Test episodes disabled
 
@@ -241,7 +242,7 @@ operations:
 
   # # # Vector Operations:
   VECTOR_HEAVYSIDE_OP: 1
-  MATRIX_HEAVYSIDE_OP: 1
+  # MATRIX_HEAVYSIDE_OP: 1
   SCALAR_VECTOR_PRODUCT_OP: 1
   SCALAR_BROADCAST_OP: 1
   VECTOR_RECIPROCAL_OP: 1
@@ -261,30 +262,30 @@ operations:
   SCALAR_VECTOR_ASSIGN_OP: 1
 
   # # Matrix Operations:
-  VECTOR_OUTER_PRODUCT_OP: 1
-  SCALAR_MATRIX_PRODUCT_OP: 1
-  MATRIX_RECIPROCAL_OP: 1
-  MATRIX_VECTOR_PRODUCT_OP: 1
-  VECTOR_COLUMN_BROADCAST_OP: 1
-  VECTOR_ROW_BROADCAST_OP: 1
-  MATRIX_NORM_OP: 1
-  MATRIX_COLUMN_NORM_OP: 1
-  MATRIX_ROW_NORM_OP: 1
-  MATRIX_TRANSPOSE_OP: 1
-  MATRIX_ABS_OP: 1
-  MATRIX_SUM_OP: 1
-  MATRIX_DIFF_OP: 1
-  MATRIX_PRODUCT_OP: 1
-  MATRIX_DIVISION_OP: 1
-  MATRIX_MATRIX_PRODUCT_OP: 1
-  MATRIX_MIN_OP: 1
-  MATRIX_MAX_OP: 1
-  MATRIX_MEAN_OP: 1
-  MATRIX_ROW_MEAN_OP: 1
-  MATRIX_ROW_ST_DEV_OP: 1
-  MATRIX_ST_DEV_OP: 1
-  MATRIX_CONST_SET_OP: 1
-  SCALAR_MATRIX_ASSIGN_OP: 1
+  # VECTOR_OUTER_PRODUCT_OP: 1
+  # SCALAR_MATRIX_PRODUCT_OP: 1
+  # MATRIX_RECIPROCAL_OP: 1
+  # MATRIX_VECTOR_PRODUCT_OP: 1
+  # VECTOR_COLUMN_BROADCAST_OP: 1
+  # VECTOR_ROW_BROADCAST_OP: 1
+  # MATRIX_NORM_OP: 1
+  # MATRIX_COLUMN_NORM_OP: 1
+  # MATRIX_ROW_NORM_OP: 1
+  # MATRIX_TRANSPOSE_OP: 1
+  # MATRIX_ABS_OP: 1
+  # MATRIX_SUM_OP: 1
+  # MATRIX_DIFF_OP: 1
+  # MATRIX_PRODUCT_OP: 1
+  # MATRIX_DIVISION_OP: 1
+  # MATRIX_MATRIX_PRODUCT_OP: 1
+  # MATRIX_MIN_OP: 1
+  # MATRIX_MAX_OP: 1
+  # MATRIX_MEAN_OP: 1
+  # MATRIX_ROW_MEAN_OP: 1
+  # MATRIX_ROW_ST_DEV_OP: 1
+  # MATRIX_ST_DEV_OP: 1
+  # MATRIX_CONST_SET_OP: 1
+  # SCALAR_MATRIX_ASSIGN_OP: 1
 
 # Separate evaluation episode seeds.
 evaluation_parameters:

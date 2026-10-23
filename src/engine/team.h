@@ -317,6 +317,7 @@ class team {
        members_run_;  // team members for fast direct access
    int n_atomic_;
    int _n_eval;
+   int eval_episode_start_ = 0;  // Transient MPI batch offset, not policy state.
    int numLinearM_;
    int numActiveTeams_;
    int numActivePrograms_;

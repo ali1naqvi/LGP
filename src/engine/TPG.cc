@@ -4093,6 +4093,9 @@ void TPG::ReadCheckpoint(long t, int phase, bool fromString,
             program_pop_[memberId]->nrefs_--;
          }
          AddTeam(m);
+      } else if (outcome_fields[0] == "eval_episode_start") {
+         team_map_.at(stol(outcome_fields[1]))->eval_episode_start_ =
+             stoi(outcome_fields[2]);
       } else if (outcome_fields[0] == "self_modifying_state") {
          RestoreSelfModifyingRates(outcome_fields);
       } else if (outcome_fields[0].compare("population_role") == 0) {
@@ -4568,6 +4571,8 @@ std::string TPG::WriteMPICheckpoint(vector<team*>& root_teams) {
    }
    for (auto tm : teams) {
       ss << tm->ToString();
+      ss << "eval_episode_start:" << tm->id_ << ":"
+         << tm->eval_episode_start_ << endl;
    }
    ss << endl;
    return ss.str();

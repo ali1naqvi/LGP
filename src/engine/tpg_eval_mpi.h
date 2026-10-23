@@ -8,6 +8,7 @@
 #include <MountainCarContinuous.h>
 #include <Pendulum.h>
 #include <TPG.h>
+#include "training_episode_schedule.h"
 #include <TaskEnv.h>
 #include <sequence_comparisons.h>
 #include <ActionWrappers.h>
@@ -49,9 +50,20 @@ inline vector<team *> GetTeamsToEval(TPG &tpg, TaskEnv *task) {
       if (!tpg.GetParam<int>("keep_old_outcomes")) {
         tm->resetOutcomes(tpg.GetState("phase"));
       }
-      tm->_n_eval =
-          task->GetNumEval(tpg.GetState("phase")) -
+      tm->eval_episode_start_ = 0;
+      const int completed =
           tm->numOutcomes(tpg.GetState("phase"), tpg.GetState("active_task"));
+      const int batch = task->GetNumEval(tpg.GetState("phase"));
+      const int lifetime_cap =
+          tpg.GetState("phase") == _TRAIN_PHASE &&
+                  tpg.HaveParam("training_episode_lifetime_cap")
+              ? tpg.GetParam<int>("training_episode_lifetime_cap") : 0;
+      if (lifetime_cap > 0 && !tpg.GetParam<int>("keep_old_outcomes")) {
+        throw std::runtime_error(
+            "training_episode_lifetime_cap requires keep_old_outcomes: 1");
+      }
+      tm->_n_eval = TrainingEpisodesNeeded(completed, batch, lifetime_cap);
+      if (lifetime_cap > 0) tm->eval_episode_start_ = completed;
       if (tm->_n_eval > 0) {
         teams_to_eval.push_back(tm);
       }
@@ -69,6 +81,7 @@ inline vector<team *> GetTeamsToEval(TPG &tpg, TaskEnv *task) {
           tpg._eliteTeamPS[set_key][tpg.GetParam<int>("fit_mode")]
                           [_VALIDATION_PHASE];
       if (!tm) continue;
+      tm->eval_episode_start_ = 0;
       tm->_n_eval =
           task->GetNumEval(tpg.GetState("phase")) -
           tm->numOutcomes(tpg.GetState("phase"), tpg.GetState("active_task"));
@@ -191,7 +204,9 @@ inline void evaluator(TPG &tpg, mpi::communicator &world, vector<TaskEnv *> &tas
       eval_data.eval_result = "";
       for (auto tm : eval_data.teams) {
          eval_data.tm = tm;
-         for (eval_data.episode = 0; eval_data.episode < eval_data.tm->_n_eval;
+         const int episode_start = eval_data.tm->eval_episode_start_;
+         for (eval_data.episode = episode_start;
+              eval_data.episode < episode_start + eval_data.tm->_n_eval;
               eval_data.episode++) {
             eval_data.pred_error = 0;
             eval_data.timestep = 0;

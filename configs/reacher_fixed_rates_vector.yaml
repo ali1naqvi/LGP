@@ -32,7 +32,8 @@ ga_parameters:
   parent_select_roots_only: 0  # Whether to constrain parent selection to root teams
   tournament_size: 3  # Tournament size for selection
   shadow_run: 0  # Randomly select training survivors (uses seed_tpg)
-  keep_old_outcomes: 1  # Whether to keep evaluation outcome over time or re-evaluate each generation
+  keep_old_outcomes: 1  # Accumulate training scores across the policy lifetime
+  training_episode_lifetime_cap: 200  # Stop training evaluation after 200 episodes
   seed_with_episode_number: 1  # Same episode seeds across candidate policies
   extinction_event_occurance: 1000000000 #TODO(ali): not working as of rn
   extinction_percentage: 0 #percent to keep during extinction event
@@ -73,9 +74,8 @@ program_parameters:
   p_instructions_delete: 0.1  # Probability of deleting an instruction
   p_instructions_add: 0.1  # Probability of adding an instruction
   n_mutation_passes: 1  # Number of stacked mutation passes per selected program
-  self_modifying: 1  # Enable S2-S5 mutation-rate readout and S6 decoy
-  self_modifying_mutation_rates: "p_instructions_swap,p_instructions_delete,p_instructions_add,p_instructions_mutate"
-  evolve_self_modifying_constants: 1  # Evolve inherited S2-S6 constants when enabled
+  self_modifying: 0  # Enable S2-S5 mutation-rate readout and S6 decoy
+  evolve_self_modifying_constants: 0  # Evolve inherited S2-S6 constants when enabled
   reset_self_modifying_before_mutation: 0  # 1: inherited constants; 0: parent output rates
   reset_self_modifying_per_episode: 0  # 1: reset S2-S6 to inherited constants each episode; 0: carry over
   operations_additive: 0  # Make every instruction add its result to the destination register
@@ -89,22 +89,22 @@ program_parameters:
   p_memory_slots: 0.0 # Program variation: probability of changing memory slots
   stateful: 1 # Use stateful programs
   skip_introns: 1  # Whether to skip introns during evaluation
-  continuous_output: 2  # Vector V1 supplies 6 actuator outputs
-  n_input: "17"  # Observation count in this repository's environment
+  continuous_output: 2  # Vector V1 supplies 2 actuator outputs
+  n_input: "10"  # Observation count in this repository's environment
   min_prog_size: 1
   min_initial_prog_size: 1
   max_initial_prog_size: 25  # Max initial program size
   max_prog_size: 100  # Max program size
 
-  memory_size: 6  # Fixed vector/matrix dimension matching the actuator count
-  min_memory_size: 6  # Fixed vector/matrix dimension matching the actuator count
-  max_memory_size: 6  # Fixed vector/matrix dimension matching the actuator count
+  memory_size: 2  # Fixed vector/matrix dimension matching the actuator count
+  min_memory_size: 2  # Fixed vector/matrix dimension matching the actuator count
+  max_memory_size: 2  # Fixed vector/matrix dimension matching the actuator count
 
   gene_clone: 0
-  min_initial_mem_slots: 10
-  max_initial_mem_slots: 10
-  min_memory_slots: 10  # Minimum memory size
-  max_memory_slots: 10  # Maximum memory size (keep bounded to avoid OOM)
+  min_initial_mem_slots: 11
+  max_initial_mem_slots: 11
+  min_memory_slots: 11  # Minimum memory size
+  max_memory_slots: 11  # Maximum memory size (keep bounded to avoid OOM)
   p_hidden_stateful_mutation: 0.00 # Mutate stateful/stateless flags for all registers, including action registers
 
   # Observations are stored in a buffer with this time window
@@ -121,7 +121,7 @@ program_parameters:
 # General Task Parameters
 general_task_parameters:
   # Which tasks are active
-  active_tasks: "Mujoco_Half_Cheetah_v4"  # MuJoCo environment
+  active_tasks: "Mujoco_Reacher_v4"  # MuJoCo environment
   partially_observable: 0  # Use the partially-observable version of a task, if available
   activation_function: 2
   n_discrete_action: 0  # Continuous force only
@@ -166,9 +166,9 @@ TD_parameters:
 # Parameters Specific to Mujoco
 mujoco_parameters:
   mj_model_path: "$TPG/datasets/mujoco_models/"  # Model path
-  mj_max_timestep: 1000  # Episode limit in control steps
+  mj_max_timestep: 50  # Episode limit in control steps
   mj_reward_control_weight: 0.0
-  mj_n_eval_train: 5  # Number of train episodes
+  mj_n_eval_train: 20  # Fresh training episodes per generation
   mj_n_eval_validation: 20  # Number of validation episodes
   mj_n_eval_test: 0  # Test episodes disabled
 
@@ -241,7 +241,7 @@ operations:
 
   # # # Vector Operations:
   VECTOR_HEAVYSIDE_OP: 1
-  MATRIX_HEAVYSIDE_OP: 1
+  # MATRIX_HEAVYSIDE_OP: 1
   SCALAR_VECTOR_PRODUCT_OP: 1
   SCALAR_BROADCAST_OP: 1
   VECTOR_RECIPROCAL_OP: 1
@@ -261,30 +261,30 @@ operations:
   SCALAR_VECTOR_ASSIGN_OP: 1
 
   # # Matrix Operations:
-  VECTOR_OUTER_PRODUCT_OP: 1
-  SCALAR_MATRIX_PRODUCT_OP: 1
-  MATRIX_RECIPROCAL_OP: 1
-  MATRIX_VECTOR_PRODUCT_OP: 1
-  VECTOR_COLUMN_BROADCAST_OP: 1
-  VECTOR_ROW_BROADCAST_OP: 1
-  MATRIX_NORM_OP: 1
-  MATRIX_COLUMN_NORM_OP: 1
-  MATRIX_ROW_NORM_OP: 1
-  MATRIX_TRANSPOSE_OP: 1
-  MATRIX_ABS_OP: 1
-  MATRIX_SUM_OP: 1
-  MATRIX_DIFF_OP: 1
-  MATRIX_PRODUCT_OP: 1
-  MATRIX_DIVISION_OP: 1
-  MATRIX_MATRIX_PRODUCT_OP: 1
-  MATRIX_MIN_OP: 1
-  MATRIX_MAX_OP: 1
-  MATRIX_MEAN_OP: 1
-  MATRIX_ROW_MEAN_OP: 1
-  MATRIX_ROW_ST_DEV_OP: 1
-  MATRIX_ST_DEV_OP: 1
-  MATRIX_CONST_SET_OP: 1
-  SCALAR_MATRIX_ASSIGN_OP: 1
+  # VECTOR_OUTER_PRODUCT_OP: 1
+  # SCALAR_MATRIX_PRODUCT_OP: 1
+  # MATRIX_RECIPROCAL_OP: 1
+  # MATRIX_VECTOR_PRODUCT_OP: 1
+  # VECTOR_COLUMN_BROADCAST_OP: 1
+  # VECTOR_ROW_BROADCAST_OP: 1
+  # MATRIX_NORM_OP: 1
+  # MATRIX_COLUMN_NORM_OP: 1
+  # MATRIX_ROW_NORM_OP: 1
+  # MATRIX_TRANSPOSE_OP: 1
+  # MATRIX_ABS_OP: 1
+  # MATRIX_SUM_OP: 1
+  # MATRIX_DIFF_OP: 1
+  # MATRIX_PRODUCT_OP: 1
+  # MATRIX_DIVISION_OP: 1
+  # MATRIX_MATRIX_PRODUCT_OP: 1
+  # MATRIX_MIN_OP: 1
+  # MATRIX_MAX_OP: 1
+  # MATRIX_MEAN_OP: 1
+  # MATRIX_ROW_MEAN_OP: 1
+  # MATRIX_ROW_ST_DEV_OP: 1
+  # MATRIX_ST_DEV_OP: 1
+  # MATRIX_CONST_SET_OP: 1
+  # SCALAR_MATRIX_ASSIGN_OP: 1
 
 # Separate evaluation episode seeds.
 evaluation_parameters:
