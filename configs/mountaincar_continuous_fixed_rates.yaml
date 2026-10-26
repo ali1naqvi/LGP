@@ -33,6 +33,7 @@ ga_parameters:
   tournament_size: 3  # Tournament size for selection
   shadow_run: 0  # Randomly select training survivors (uses seed_tpg)
   keep_old_outcomes: 1  # Whether to keep evaluation outcome over time or re-evaluate each generation
+  training_episode_lifetime_cap: 200  # Stop training evaluation after 200 episodes
   seed_with_episode_number: 1  # Same episode seeds across candidate policies
   extinction_event_occurance: 1000000000 #TODO(ali): not working as of rn
   extinction_percentage: 0 #percent to keep during extinction event
