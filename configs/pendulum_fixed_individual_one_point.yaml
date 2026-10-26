@@ -37,7 +37,7 @@ ga_parameters:
   seed_with_episode_number: 1  # Same episode seeds across candidate policies
   extinction_event_occurance: 1000000000 #TODO(ali): not working as of rn
   extinction_percentage: 0 #percent to keep during extinction event
-  validation_mod: 100  # Validate every 100 generations, including generation 5000
+  validation_mod: 0  # Validate every 100 generations, including generation 5000
   test_mod: 0
   modes_mod: 500  # Run MODES diagnostics every 500 generations (0 keeps only the initial baseline)
   pareto_objectives: ""
