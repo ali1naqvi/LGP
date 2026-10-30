@@ -512,3 +512,46 @@ separately so collecting them preserves the existing tasks' score files.
 Copy the `acrobot_test_*` files back to the local `output/test_replay/` directory.
 Running `python3 scripts/plot/plot_test_boxplots.py` without an environment filter
 combines Acrobot with any other available test results.
+
+### Dynamic Acrobot (three mutation variants)
+
+`configs/acrobot_dynamic_{fixed_rates,fixed_individual,execution_modified_rates}.yaml`
+train fresh populations with first-link mass sampled uniformly from [0.5, 1.5).
+One mass applies to generations 0–99, a new draw to 100–199, and so on.
+All agents, episodes, MPI ranks, and three variants share the same schedule
+(`acrobot_mass_seed: 42`), including across evolutionary seeds. Other physical
+parameters remain at their existing values. The schedule is determined by the
+absolute generation, so checkpoint replay uses the corresponding mass.
+The main training log records `acrobot_mass generation ... phase ... m1 ...`.
+
+These configs retain the existing 5000 final generation, 1000 population,
+200 offspring, 20 training episodes, and 500 steps per episode. They disable
+cached outcomes and the lifetime episode cap: every candidate is reevaluated
+each generation so fitness never mixes different masses. This costs more than
+the static capped experiments. Validation and test remain disabled as in the
+source configs. The mass is not added to policy observations.
+
+Update the remote checkout with these changes and rebuild in your usual cluster
+module environment before submitting:
+
+```bash
+cmake --build build --config Release --target TPGExperimentMPI
+sbatch scripts/run/acrobot-dynamic.slurm
+```
+
+The Slurm array runs seeds 1–20 for each variant (60 jobs, at most four concurrent,
+21 MPI tasks per job). Adjust account/time/resources in the Slurm header or with
+`sbatch` flags for your cluster. Results go under
+`experiments/acrobot_dynamic/<variant>/seed_<seed>/`, with a copied config,
+launch settings, logs, and checkpoints. Existing run directories are rejected;
+use a new output root as the second Slurm-script argument for a new experiment.
+
+To submit through SSH from your local checkout (replace host and remote path):
+
+```bash
+bash scripts/run/acrobot-dynamic-ssh.sh --dry-run user@cluster /absolute/remote/LGP
+bash scripts/run/acrobot-dynamic-ssh.sh user@cluster /absolute/remote/LGP 5000
+```
+
+The SSH wrapper submits the array; it does not copy source or build remotely.
+The remote Bash login environment must load the modules required by the build.

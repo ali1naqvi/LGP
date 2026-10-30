@@ -18,7 +18,7 @@ set -euo pipefail
 : "${SLURM_ARRAY_TASK_ID:?Submit this file with sbatch as an array}"
 : "${SLURM_NTASKS:?Missing Slurm MPI task count}"
 variant=${1:-execution_modified_rates}
-last_generation=${2:-7000}
+last_generation=${2:-10000}
 case "$variant" in
     fixed_rates|fixed_individual|execution_modified_rates) ;;
     *) echo "Unknown variant: $variant" >&2; exit 2 ;;

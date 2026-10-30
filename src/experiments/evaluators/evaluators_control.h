@@ -2,8 +2,25 @@
 #define evaluators_control_h
 
 #include <TPG.h>
+#include <Acrobot.h>
+#include <acrobot_mass_schedule.h>
 
 #include "EvalData.h"
+
+// Called on evaluators after the MPI checkpoint supplies t_current, and on
+// replay paths. All episodes in a generation use the same environment.
+inline void ConfigureAcrobotMass(TPG &tpg, TaskEnv *task) {
+    auto *acrobot = dynamic_cast<Acrobot *>(task);
+    if (!acrobot || !tpg.HaveParam("acrobot_dynamic_mass") ||
+        !tpg.GetParam<int>("acrobot_dynamic_mass")) return;
+    acrobot->SetMass1(AcrobotMassForGeneration(
+        tpg.GetParam<int>("replay") ? tpg.GetParam<int>("checkpoint_in_t")
+                                   : tpg.GetState("t_current"),
+        tpg.GetParam<int>("acrobot_mass_interval"),
+        tpg.GetParam<double>("acrobot_mass_min"),
+        tpg.GetParam<double>("acrobot_mass_max"),
+        tpg.GetParam<int>("acrobot_mass_seed")));
+}
 
 /******************************************************************************/
 inline void MaybeStartAnimation(TPG &tpg) {
@@ -43,6 +60,7 @@ inline void MaybeAnimateStep(EvalData &eval) {
 
 /******************************************************************************/
 inline void EvalControl(TPG &tpg, EvalData &eval) {
+    ConfigureAcrobotMass(tpg, eval.task);
     MaybeStartAnimation(tpg);
     eval.task->Reset(tpg.rngs_[AUX_SEED]);
     eval.n_prediction = 0;
@@ -70,6 +88,7 @@ inline void EvalControlViz(TPG &tpg, EvalData &eval,
                     vector<map<long, double>> &teamUseMapPerTask,
                     set<team *, teamIdComp> &teams_visitedAllTasks,
                     int &steps) {
+    ConfigureAcrobotMass(tpg, eval.task);
     MaybeStartAnimation(tpg);
     eval.task->Reset(tpg.rngs_[AUX_SEED]);
     eval.n_prediction = 0;

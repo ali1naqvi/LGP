@@ -14,11 +14,11 @@ from plot_test_boxplots import load_scores, METHODS
 
 
 PANELS = (
-    ("Mountain Car Continuous", 2000, EXPERIMENTS["Mountain Car Continuous"]),
-    ("Pendulum", 1000, EXPERIMENTS["Pendulum"]),
+    ("Mountain Car Continuous", 5000, EXPERIMENTS["Mountain Car Continuous"]),
+    ("Pendulum", 5000, ("pendulum_execution_modified_rates", "pendulum_fixed_individual_one_point", "pendulum_fixed_rates")),
     ("Acrobot", 5000, ("acrobot_execution_modified_rates", "acrobot_fixed_individual", "acrobot_fixed_rates")),
-    ("Reacher", 3000, EXPERIMENTS["Reacher"]),
-    ("Half Cheetah", 4000, EXPERIMENTS["Half Cheetah"]),
+    ("Reacher", 5000, ("reacher_execution_modified_rates_vector", "reacher_fixed_individual_vector", "reacher_fixed_rates_vector")),
+    ("Half Cheetah", 5000, ("halfcheetah_execution_modified_rates_vector", "halfcheetah_fixed_individual_vector", "halfcheetah_fixed_rates_vector")),
 )
 OUTPUT = ROOT / "output" / "training_requested_ranges"
 

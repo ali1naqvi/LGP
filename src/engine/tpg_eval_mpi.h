@@ -39,6 +39,19 @@ typedef void (*EvaluatorFunction)(TPG &, EvalData &);
   current phase (train, test, validate) and current task
 */
 inline vector<team *> GetTeamsToEval(TPG &tpg, TaskEnv *task) {
+  ConfigureAcrobotMass(tpg, task);
+  if (auto *acrobot = dynamic_cast<Acrobot *>(task);
+      acrobot && tpg.HaveParam("acrobot_dynamic_mass") &&
+      tpg.GetParam<int>("acrobot_dynamic_mass")) {
+    if (tpg.GetParam<int>("keep_old_outcomes") ||
+        (tpg.HaveParam("training_episode_lifetime_cap") &&
+         tpg.GetParam<int>("training_episode_lifetime_cap") != 0))
+      throw std::runtime_error(
+          "Dynamic Acrobot requires keep_old_outcomes: 0 and training_episode_lifetime_cap: 0");
+    tpg.oss << "acrobot_mass generation " << tpg.GetState("t_current")
+            << " phase " << tpg.GetState("phase")
+            << " m1 " << acrobot->Mass1() << std::endl;
+  }
   auto root_teams = tpg.GetRootTeamsInVec();
   vector<team *> teams_to_eval;
   if (task->eval_type_ == "XPredPrey") {

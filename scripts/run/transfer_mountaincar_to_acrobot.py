@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Transfer existing MountainCarContinuous generation-2000 checkpoints to Acrobot from 2001.
+"""Transfer existing MountainCarContinuous generation-5000 checkpoints to Acrobot from 5001.
 
 By default run seeds 1–20 for the selected variant. Use --seed for one run,
 --jobs for simultaneous runs, and --dry-run to inspect the experiment plan.
@@ -25,13 +25,13 @@ SOURCE_CONFIGS = {
     "fixed_individual": "mountaincar_continuous_fixed_individual",
     "execution_modified_rates": "mountaincar_continuous_execution_modified_rates",
 }
-GENERATION = 2000
+GENERATION = 5000
 
 
 def source_checkpoint(variant: str, seed: int, source_dir: Path) -> Path:
     path = source_dir / SOURCE_CONFIGS[variant] / "checkpoints" / f"cp.{GENERATION}.{seed}.0.rslt"
     if checkpoint_generation(path, seed) != GENERATION:
-        raise ValueError(f"Transfer requires generation 2000: {path}")
+        raise ValueError(f"Transfer requires generation 5000: {path}")
     return path
 
 
@@ -44,14 +44,14 @@ def experiment_configs(variant: str) -> tuple[str, str]:
         r"\1\2: 0", mountaincar, flags=re.MULTILINE,
     )
     mountaincar = re.sub(r'^  n_generations:.*$',
-                        '  n_generations: 2000  # Generations 0–2000 (2,001 total)',
+                        '  n_generations: 5000',
                         mountaincar, flags=re.MULTILINE)
     mountaincar = mountaincar.replace('# Pendulum training/validation budgets;',
                                       '# MountainCarContinuous training/validation budgets;')
     acrobot = mountaincar.replace('active_tasks: "MountainCarContinuous"',
                                   'active_tasks: "Acrobot"')
     acrobot = re.sub(r'^  n_generations:.*$',
-                     '  n_generations: 7000  # Acrobot generations 2001–7000 (5,000 total)',
+                     '  n_generations: 10000',
                      acrobot, flags=re.MULTILINE)
     acrobot = re.sub(r'^  n_input:.*$',
                      '  n_input: "4"  # Acrobot has four observations',
@@ -73,13 +73,13 @@ def run_transfer(variant: str, seed: int, args: argparse.Namespace) -> None:
     if args.fresh:
         source = mountaincar_dir / "checkpoints" / f"cp.{GENERATION}.{seed}.0.rslt"
         mode = "fresh_mountaincar_continuous"
-        description = "fresh MountainCarContinuous 0–2000"
+        description = "fresh MountainCarContinuous 0–5000"
     else:
         source = source_checkpoint(variant, seed, args.source_dir)
         acrobot_config = match_checkpoint_registers(acrobot_config, source)
         mode = "existing_checkpoint"
         description = str(source)
-    print(f"{variant} seed {seed}: {description} → Acrobot 2001–{args.generations}; {destination}", flush=True)
+    print(f"{variant} seed {seed}: {description} → Acrobot 5001–{args.generations}; {destination}", flush=True)
     if args.dry_run:
         return
     destination.mkdir(parents=True, exist_ok=True)
@@ -100,9 +100,9 @@ def run_transfer(variant: str, seed: int, args: argparse.Namespace) -> None:
     if args.fresh:
         run_stage(args.executable, mountaincar_dir, mountaincar_config, seed, args.seed_aux,
                   GENERATION, args.processes, args.launcher)
-    # This is the full population saved after generation-2000 selection.
+    # This is the full population saved after generation-5000 selection.
     if checkpoint_generation(source, seed) != GENERATION:
-        raise ValueError(f"Transfer requires generation 2000: {source}")
+        raise ValueError(f"Transfer requires generation 5000: {source}")
     checkpoint_dir = acrobot_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     transferred = checkpoint_dir / source.name
@@ -124,7 +124,7 @@ def main() -> None:
     seeds.add_argument("--seed", type=int, help="Run one seed")
     seeds.add_argument("--seeds", type=int, nargs="+", help="Selected seeds (default: 1–20)")
     parser.add_argument("--seed-aux", type=int, default=42, help="Simulator seed, matching MountainCarContinuous configs")
-    parser.add_argument("--generations", type=int, default=7000, help="Last absolute Acrobot generation (7000 gives 5,000 target generations)")
+    parser.add_argument("--generations", type=int, default=10000, help="Last absolute target generation (10000 gives 5,000 target generations)")
     parser.add_argument("--processes", type=int, default=2, help="MPI processes per run")
     parser.add_argument("--launcher", choices=("mpirun", "srun"), default="mpirun",
                         help="Use srun inside a Slurm allocation")
@@ -138,7 +138,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Print the plan without launching runs")
     args = parser.parse_args()
     if args.generations <= GENERATION:
-        parser.error("--generations must exceed 2000")
+        parser.error("--generations must exceed 5000")
     if args.processes < 2 or args.jobs < 1:
         parser.error("--processes must be at least 2 and --jobs at least 1")
     if args.launcher == "srun" and args.jobs != 1:

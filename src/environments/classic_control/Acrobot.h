@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <random>
+#include <stdexcept>
 
 #include "ClassicControlEnv.h"
 
@@ -26,7 +27,7 @@ class Acrobot : public ClassicControlEnv {
     static constexpr double kMaxTheta2 = M_PI;
     static constexpr double kMaxTheta1Dot = 4 * M_PI;
     static constexpr double kMaxTheta2Dot = 9 * M_PI;
-    static constexpr double kM1 = 1.0;
+    double mass1_ = 1.0;
     static constexpr double kM2 = 1.0;
     static constexpr double kL1 = 1.0;
     static constexpr double kLC1 = 0.5;
@@ -65,6 +66,13 @@ class Acrobot : public ClassicControlEnv {
     }
 
     ~Acrobot() {}
+
+    void SetMass1(double mass) {
+        if (!std::isfinite(mass) || mass <= 0)
+            throw std::invalid_argument("Acrobot mass must be positive and finite");
+        mass1_ = mass;
+    }
+    double Mass1() const { return mass1_; }
 
     bool DiscreteActions() const { return false; }
     double MinActionContinuous() const { return -1.0; }
@@ -121,7 +129,7 @@ class Acrobot : public ClassicControlEnv {
             count++;
 
             d1 =
-                kM1 * std::pow(kLC1, 2) +
+                mass1_ * std::pow(kLC1, 2) +
                 kM2 * (std::pow(kL1, 2) + std::pow(kLC2, 2) +
                        2 * kL1 * kLC2 * std::cos(state_[StateIndex::kTheta2])) +
                 kI1 + kI2;
@@ -138,7 +146,7 @@ class Acrobot : public ClassicControlEnv {
                       2 * kM2 * kL1 * kLC2 * state_[StateIndex::kTheta1Dot] *
                           state_[StateIndex::kTheta2Dot] *
                           std::sin(state_[StateIndex::kTheta2])) +
-                    (kM1 * kLC1 + kM2 * kL1) * kG *
+                    (mass1_ * kLC1 + kM2 * kL1) * kG *
                         std::cos(state_[StateIndex::kTheta1] - M_PI / 2.0) +
                     phi_2;
 

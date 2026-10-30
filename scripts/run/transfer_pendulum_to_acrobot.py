@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Transfer existing Pendulum generation-1000 checkpoints to Acrobot from 1001.
+"""Transfer existing Pendulum generation-5000 checkpoints to Acrobot from 5001.
 
 By default run seeds 1–20 for the selected variant. Use --seed for one run,
 --jobs for simultaneous runs, and --dry-run to inspect the experiment plan.
@@ -17,11 +17,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_CONFIGS = {
-    "fixed_rates": "pendulum_fixed_rates_no_limit",
-    "fixed_individual": "pendulum_fixed_individual_all",
-    "execution_modified_rates": "pendulum_execution_modified_rates_no_limit",
+    "fixed_rates": "pendulum_fixed_rates",
+    "fixed_individual": "pendulum_fixed_individual_one_point",
+    "execution_modified_rates": "pendulum_execution_modified_rates",
 }
-GENERATION = 1000
+GENERATION = 5000
 
 
 def training_only_config(config: str) -> str:
@@ -71,7 +71,7 @@ def latest_checkpoint(directory: Path, seed: int) -> int | None:
 def source_checkpoint(variant: str, seed: int, source_dir: Path) -> Path:
     path = source_dir / SOURCE_CONFIGS[variant] / "checkpoints" / f"cp.{GENERATION}.{seed}.0.rslt"
     if checkpoint_generation(path, seed) != GENERATION:
-        raise ValueError(f"Transfer requires generation 1000: {path}")
+        raise ValueError(f"Transfer requires generation 5000: {path}")
     return path
 
 
@@ -94,8 +94,8 @@ def match_checkpoint_registers(config: str, checkpoint: Path) -> str:
 
 
 def experiment_configs(variant: str) -> tuple[str, str]:
-    source = ROOT / "configs" / "done" / f"{SOURCE_CONFIGS[variant]}.yaml"
-    pendulum = source.read_text()
+    source = ROOT / "configs" / f"{SOURCE_CONFIGS[variant]}.yaml"
+    pendulum = training_only_config(source.read_text())
     # Disable new non-scalar instructions; existing checkpoint instructions
     # are preserved by ReadCheckpoint even when their operations are disabled.
     pendulum = re.sub(
@@ -111,6 +111,8 @@ def experiment_configs(variant: str) -> tuple[str, str]:
     acrobot = acrobot.replace('pendulum_max_timesteps:', 'acrobot_max_timesteps:')
     acrobot = re.sub(r'^  acrobot_max_timesteps:.*$', '  acrobot_max_timesteps: 500', acrobot, flags=re.MULTILINE)
     acrobot = acrobot.replace('pendulum_n_eval_', 'acrobot_n_eval_')
+    pendulum = re.sub(r"^  n_generations:.*$", "  n_generations: 5000", pendulum, flags=re.MULTILINE)
+    acrobot = re.sub(r"^  n_generations:.*$", "  n_generations: 10000", acrobot, flags=re.MULTILINE)
     return pendulum, acrobot
 
 
@@ -155,13 +157,13 @@ def run_transfer(variant: str, seed: int, args: argparse.Namespace) -> None:
     if args.fresh:
         source = pendulum_dir / "checkpoints" / f"cp.{GENERATION}.{seed}.0.rslt"
         mode = "fresh_pendulum"
-        description = "fresh Pendulum 0–1000"
+        description = "fresh Pendulum 0–5000"
     else:
         source = source_checkpoint(variant, seed, args.source_dir)
         acrobot_config = match_checkpoint_registers(acrobot_config, source)
         mode = "existing_checkpoint"
         description = str(source)
-    print(f"{variant} seed {seed}: {description} → Acrobot 1001–{args.generations}; {destination}", flush=True)
+    print(f"{variant} seed {seed}: {description} → Acrobot 5001–{args.generations}; {destination}", flush=True)
     if args.dry_run:
         return
     destination.mkdir(parents=True, exist_ok=True)
@@ -182,9 +184,9 @@ def run_transfer(variant: str, seed: int, args: argparse.Namespace) -> None:
     if args.fresh:
         run_stage(args.executable, pendulum_dir, pendulum_config, seed, args.seed_aux,
                   GENERATION, args.processes, args.launcher)
-    # This is the full population saved after generation-1000 selection.
+    # This is the full population saved after generation-5000 selection.
     if checkpoint_generation(source, seed) != GENERATION:
-        raise ValueError(f"Transfer requires generation 1000: {source}")
+        raise ValueError(f"Transfer requires generation 5000: {source}")
     checkpoint_dir = acrobot_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     transferred = checkpoint_dir / source.name
@@ -206,7 +208,7 @@ def main() -> None:
     seeds.add_argument("--seed", type=int, help="Run one seed")
     seeds.add_argument("--seeds", type=int, nargs="+", help="Selected seeds (default: 1–20)")
     parser.add_argument("--seed-aux", type=int, default=42, help="Simulator seed, matching Pendulum configs")
-    parser.add_argument("--generations", type=int, default=5000, help="Last Acrobot generation")
+    parser.add_argument("--generations", type=int, default=10000, help="Last absolute target generation (10000 gives 5,000 target generations)")
     parser.add_argument("--processes", type=int, default=2, help="MPI processes per run")
     parser.add_argument("--launcher", choices=("mpirun", "srun"), default="mpirun",
                         help="Use srun inside a Slurm allocation")
@@ -220,7 +222,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Print the plan without launching runs")
     args = parser.parse_args()
     if args.generations <= GENERATION:
-        parser.error("--generations must exceed 1000")
+        parser.error("--generations must exceed 5000")
     if args.processes < 2 or args.jobs < 1:
         parser.error("--processes must be at least 2 and --jobs at least 1")
     if args.launcher == "srun" and args.jobs != 1:
