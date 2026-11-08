@@ -276,6 +276,7 @@ inline void replayer(TPG &tpg, vector<TaskEnv *> &tasks) {
 
           for (eval_data.episode = 0; eval_data.episode < eval_data.tm->_n_eval;
                eval_data.episode++) {
+              eval_data.replay_episode_reward = 0;
               eval_data.pred_error = 0;
               eval_data.timestep = 0;
               eval_data.sample = 0;
@@ -308,7 +309,10 @@ inline void replayer(TPG &tpg, vector<TaskEnv *> &tasks) {
               }
 
               tpg.FinalizeStepData(eval_data);
-              double reward = eval_data.stats_double[REWARD1_IDX];
+              const bool noise_run = tpg.GetParam<int>("replay_noise_calibrate") != 0 ||
+                  tpg.GetParam<int>("replay_noise_channel") >= 0;
+              double reward = noise_run ? eval_data.replay_episode_reward
+                                        : eval_data.stats_double[REWARD1_IDX];
               outcomes.push_back(reward);
              //std::cerr << "EPISODE: " << eval_data.episode << " REWARD: " << reward << endl;
               //std::cout << "END OF EPISODE" << endl;
@@ -320,8 +324,19 @@ inline void replayer(TPG &tpg, vector<TaskEnv *> &tasks) {
       // tpg.printGraphDotGPTPXXI(eval_data.tm->id_, teams_visitedAllTasks,
       //                         teamUseMapPerTask, steps_per_task);
 
+      const bool noise_evaluation = tpg.GetParam<int>("replay_noise_calibrate") != 0 ||
+          tpg.GetParam<int>("replay_noise_channel") >= 0;
+      if (noise_evaluation) {
+          const auto precision = cout.precision();
+          cout.precision(17);
+          cout << "noise_fitness";
+          for (double reward : outcomes) cout << ',' << reward;
+          cout << endl;
+          cout.precision(precision);
+      } else {
       tpg.printGraphDotMujoco(eval_data.tm->id_, eval_data.teams_visited);
       tpg.printGraphDotMujocoVisited(eval_data.tm->id_, eval_data.teams_visited);
+      }
 
       cout << " Evaluation result team:" << eval_data.tm->id_ << " n_outcomes "
           << outcomes.size() << " mean " << VectorMean(outcomes) << " median "

@@ -42,6 +42,7 @@ class EvalData {
     std::vector<double> fingerprint;  // Behaviour fingerprint (usually not used)
     double pred_error = 0;
     double running_mean = 0;
+    double replay_episode_reward = 0;  // Complete return for noise evaluations.
 
     // double Stats to track for each evaluation
     // Currently this vec will contain:

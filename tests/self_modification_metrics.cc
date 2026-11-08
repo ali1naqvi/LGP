@@ -1,6 +1,7 @@
 #include "RegisterMachine.h"
 #include "TPG.h"
 #include "XPredPreyLogging.h"
+#include "ActionWrappers.h"
 #include <iostream>
 #include <stdexcept>
 
@@ -50,6 +51,22 @@ int main() {
    check(program.instructions_effective_.size() == 2, "Only action and active-rate writes should survive");
    check(program.n_self_modification_only_instructions_ == 1, "Only active-rate instruction is self-modification-only");
    check(program.ToString(false).find(":SM1:SL4:") != std::string::npos, "Checkpoint must identify the new layout");
+   EvalData eval;
+   eval.program_out = &program;
+   for (size_t reg = 0; reg < 8; ++reg) scalar->working_memory_[reg](0, 0) = double(reg) / 10;
+   auto actions = WrapScalarActionsMujoco(eval);
+   check(actions.size() == 3, "Self-modifying actions must skip S2-S6");
+   check(actions[2] == std::tanh(0.7), "Third action must read S7");
+   params["use_all_scalar_registers"] = 1;
+   params["environment_action_space"] = 3;
+   program.MarkIntrons(params, 8);
+   check(program.instructions_effective_.size() == 3, "Scalar action mapping must preserve S7 writes");
+   check(program.n_self_modification_only_instructions_ == 1, "Rate outputs must remain separate from actions");
+   program.self_modifying_ = false;
+   actions = WrapScalarActionsMujoco(eval);
+   check(actions.size() == 8 && actions[2] == std::tanh(0.2), "Ordinary programs must use consecutive registers");
+   program.self_modifying_ = true;
+   params["use_all_scalar_registers"] = 0;
    // Held-out MPI results must not change the rates used by reproduction.
    TPG tpg;
    tpg.program_pop_[program.id_] = &program;

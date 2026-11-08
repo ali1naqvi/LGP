@@ -139,6 +139,13 @@ constexpr size_t kSelfModifyingRequiredRegisterCount =
 constexpr size_t kSelfModifyingDecoyRegister = kSelfModifyingRequiredRegisterCount;
 constexpr size_t kSelfModifyingMinScalarRegisters = kSelfModifyingDecoyRegister + 1;
 
+inline size_t ScalarActionRegister(size_t action, bool self_modifying) {
+   // Keep mutation outputs and the neutral decoy out of actuator controls.
+   return self_modifying && action >= kSelfModifyingFirstRegister
+       ? action + kSelfModifyingRegisterCount + 1
+       : action;
+}
+
 inline bool IsSelfModifyingRateRegister(int idx) {
    return idx >= static_cast<int>(kSelfModifyingFirstRegister) &&
           idx < static_cast<int>(kSelfModifyingRequiredRegisterCount);

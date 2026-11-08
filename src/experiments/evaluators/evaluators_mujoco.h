@@ -279,14 +279,16 @@ inline void EvalMujoco(TPG& tpg, EvalData& eval_data) {
       if (std::any_cast<int>(tpg.params_["use_all_scalar_registers"]) == 0){  
         auto ctrl = WrapVectorActionMuJoco(eval_data);          
         TaskEnv::Results r = task->sim_step(ctrl);
-        eval_data.stats_double[REWARD1_IDX] += r.r1;  
+        eval_data.stats_double[REWARD1_IDX] += r.r1;
+        eval_data.replay_episode_reward += r.r1;  
         eval_data.AccumulateStepData();
         tpg.ComputeIndReward(eval_data, tpg.params_, r.r1*10);
          }
       else{
         auto ctrl = WrapScalarActionsMujoco(eval_data);
         TaskEnv::Results r = task->sim_step(ctrl);
-        eval_data.stats_double[REWARD1_IDX] += r.r1;  
+        eval_data.stats_double[REWARD1_IDX] += r.r1;
+        eval_data.replay_episode_reward += r.r1;  
         eval_data.AccumulateStepData();
         tpg.ComputeIndReward(eval_data, tpg.params_, r.r1*10);
          }

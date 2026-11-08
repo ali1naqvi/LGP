@@ -851,7 +851,9 @@ void RegisterMachine::MarkIntrons(
       if (action_space > n_memories) action_space = n_memories;
 
       for (int i = 0; i < action_space; ++i) {
-         memories_effective[MemoryEigen::kScalarType_][i] = true;
+         const size_t reg = ScalarActionRegister(i, self_modifying_);
+         if (reg >= static_cast<size_t>(n_memories)) break;
+         memories_effective[MemoryEigen::kScalarType_][reg] = true;
       }
       if (std::any_cast<int>(params["matrix_modulation"]) == 1) {
          memories_effective[MemoryEigen::kMatrixType_][0] = true;

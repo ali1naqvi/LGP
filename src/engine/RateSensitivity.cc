@@ -30,7 +30,7 @@ std::vector<double> ParseFractions(const std::string &text) {
    while (std::getline(ss, item, ',')) {
       if (item.empty()) continue;
       const double value = std::stod(item);
-      if (!(value > 0.0)) {
+      if (!(value > 0.0) || !std::isfinite(value)) {
          throw std::invalid_argument("rate_sensitivity_fractions must be positive");
       }
       fractions.push_back(value);
@@ -146,6 +146,45 @@ std::array<double, kSelfModifyingRegisterCount> RateSensitivity::RawRates(
 }
 
 void RateSensitivity::BeforeStep(TPG &tpg, EvalData &eval_data) {
+   if (tpg.GetParam<int>("replay") != 0 && eval_data.obs != nullptr) {
+      const bool calibrate = tpg.GetParam<int>("replay_noise_calibrate") != 0;
+      const int channel = tpg.GetParam<int>("replay_noise_channel");
+      if (calibrate || channel >= 0) {
+         if (eval_data.obs->scalarStateType != 0)
+            throw std::runtime_error("Replay noise requires double observations");
+         const auto &obs = *eval_data.obs->getStatePointerDouble();
+         const size_t dim = eval_data.obs->dim_;
+         if (calibrate) {
+            if (calibration_count_ == 0) {
+               calibration_mean_.assign(dim, 0.0);
+               calibration_m2_.assign(dim, 0.0);
+            }
+            ++calibration_count_;
+            for (size_t i = 0; i < dim; ++i) {
+               const double delta = obs[i] - calibration_mean_[i];
+               calibration_mean_[i] += delta / calibration_count_;
+               calibration_m2_[i] += delta * (obs[i] - calibration_mean_[i]);
+            }
+         }
+         if (channel >= 0) {
+            const double sigma = tpg.GetParam<double>("replay_noise_sigma");
+            if (size_t(channel) >= dim || !std::isfinite(sigma) || sigma < 0)
+               throw std::invalid_argument("Invalid replay observation noise settings");
+            if (noise_episode_ != eval_data.episode) {
+               noise_episode_ = eval_data.episode;
+               std::seed_seq seed{tpg.GetParam<int>("replay_noise_seed"), noise_episode_};
+               noise_rng_.seed(seed);
+               standard_normal_.reset();
+            }
+            original_observation_ = eval_data.obs;
+            noisy_buffer_.assign(obs.begin(), obs.begin() + dim);
+            noisy_buffer_[channel] += sigma * standard_normal_(noise_rng_);
+            noisy_observation_.dim_ = dim;
+            noisy_observation_.Set(noisy_buffer_);
+            eval_data.obs = &noisy_observation_;
+         }
+      }
+   }
    if (!Enabled(tpg, eval_data)) return;
    const int task = tpg.GetState("active_task");
    if (task != last_task_ || eval_data.episode != last_episode_) {
@@ -164,6 +203,29 @@ void RateSensitivity::BeforeStep(TPG &tpg, EvalData &eval_data) {
 }
 
 void RateSensitivity::AfterStep(TPG &tpg, EvalData &eval_data) {
+   if (tpg.GetParam<int>("replay") != 0 && eval_data.tm &&
+       (tpg.GetParam<int>("replay_noise_calibrate") != 0 ||
+        tpg.GetParam<int>("replay_noise_channel") >= 0)) {
+      std::array<double, kSelfModifyingRegisterCount> rates{};
+      size_t count = 0;
+      for (auto *prog : eval_data.tm->members_) {
+         if (!prog->self_modifying_) continue;
+         const auto probabilities = prog->MutationProbabilities(tpg.params_);
+         for (size_t r = 0; r < rates.size(); ++r) rates[r] += probabilities[r];
+         ++count;
+      }
+      if (count) {
+         ++rate_sample_count_;
+         for (size_t r = 0; r < rates.size(); ++r) {
+            final_rates_[r] = rates[r] / count;
+            rate_sum_[r] += final_rates_[r];
+         }
+      }
+   }
+   if (original_observation_) {
+      eval_data.obs = original_observation_;
+      original_observation_ = nullptr;
+   }
    if (!active_ || steps_.empty() || eval_data.tm == nullptr ||
        eval_data.tm->id_ != team_id_) {
       return;
@@ -174,6 +236,21 @@ void RateSensitivity::AfterStep(TPG &tpg, EvalData &eval_data) {
 }
 
 void RateSensitivity::Analyze(TPG &tpg, EvalData &eval_data) {
+   if (rate_sample_count_) {
+      const auto precision = std::cout.precision();
+      std::cout << std::setprecision(17) << "noise_rates";
+      for (double value : rate_sum_) std::cout << ',' << value / rate_sample_count_;
+      std::cout << "\nnoise_final_rates";
+      for (double value : final_rates_) std::cout << ',' << value;
+      std::cout << '\n' << std::setprecision(precision);
+   }
+   if (calibration_count_) {
+      const auto precision = std::cout.precision();
+      std::cout << std::setprecision(17) << "noise_std";
+      for (double m2 : calibration_m2_)
+         std::cout << ',' << std::sqrt(m2 / calibration_count_);
+      std::cout << '\n' << std::setprecision(precision);
+   }
    if (!active_ || steps_.empty()) return;
    auto &params = tpg.params_;
    const auto fractions =
@@ -234,6 +311,16 @@ void RateSensitivity::Analyze(TPG &tpg, EvalData &eval_data) {
       return prog.MutationProbabilities(params);
    };
 
+   const bool gaussian = tpg.GetParam<int>("rate_sensitivity_gaussian") != 0;
+   std::ofstream noisy;
+   if (gaussian) {
+      noisy.open(prefix.str() + ".gaussian.csv");
+      if (!noisy) throw std::runtime_error("Cannot open Gaussian sensitivity output");
+      noisy << std::setprecision(std::numeric_limits<double>::max_digits10);
+      noisy << "program,step,episode,timestep,observation,alpha";
+      for (const char *name : kRateNames) noisy << ",base_" << name << ",dp_" << name;
+      noisy << '\n';
+   }
    for (size_t k = 0; k < programs_.size(); ++k) {
       auto &prog = *programs_[k];
       std::vector<std::array<double, kSelfModifyingRegisterCount>> base_raw(n_steps);
@@ -268,6 +355,34 @@ void RateSensitivity::Analyze(TPG &tpg, EvalData &eval_data) {
                    << " state mismatches)\n";
       }
 
+      if (gaussian) {
+         // Restart the noise stream for each alpha/program: paired noise draws.
+         // Test one channel at a time, with fresh noise at every timestep.
+         for (size_t channel = 0; channel < dim; ++channel)
+         for (double alpha : fractions) {
+            std::mt19937 noise_rng(tpg.GetParam<int>("rate_sensitivity_noise_seed"));
+            std::normal_distribution<double> normal(0.0, 1.0);
+            Restore(prog, steps_.front().before[k]);
+            for (size_t t = 0; t < n_steps; ++t) {
+               const auto &step = steps_[t];
+               if (t && step.segment != steps_[t - 1].segment)
+                  team::InitProgramMemory(&prog, params);
+               // Match program randomness to the clean baseline independently
+               // of observation noise, while retaining noisy working memory.
+               for (const auto &[index, rng] : step.before[k].rngs)
+                  prog.instructions_effective_[index]->rng_ = rng;
+               auto obs = step.obs;
+               obs[channel] += alpha * sd[channel] * normal(noise_rng);
+               run(prog, obs, step.timestep);
+               const auto p = probabilities(prog);
+               noisy << prog.id_ << ',' << t << ',' << step.episode << ','
+                     << step.timestep << ',' << channel << ',' << alpha;
+               for (size_t r = 0; r < kSelfModifyingRegisterCount; ++r)
+                  noisy << ',' << base_p[t][r] << ',' << p[r] - base_p[t][r];
+               noisy << '\n';
+            }
+         }
+      } else
       for (size_t t = 0; t < n_steps; ++t) {
          const auto &step = steps_[t];
          for (size_t i = 0; i < dim; ++i) {

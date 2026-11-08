@@ -1959,7 +1959,13 @@ void TPG::SetParams(int argc, char** argv) {
    // Optional replay-only episode limit; 0 preserves each task's default.
    params_["replay_max_timesteps"] = 0;
    // Replay-only observation-to-mutation-rate sensitivity (RateSensitivity.h).
+   params_["replay_noise_calibrate"] = 0;
+   params_["replay_noise_channel"] = -1;
+   params_["replay_noise_sigma"] = 0.0;
+   params_["replay_noise_seed"] = 42;
    params_["rate_sensitivity"] = 0;
+   params_["rate_sensitivity_gaussian"] = 0;
+   params_["rate_sensitivity_noise_seed"] = 42;
    params_["rate_sensitivity_fractions"] = std::string("0.01,0.05,0.1");
    // Maximum carried-over steps per perturbation; 0 follows to the end.
    params_["rate_sensitivity_carry_horizon"] = 0;

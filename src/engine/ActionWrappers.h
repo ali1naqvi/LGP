@@ -168,15 +168,10 @@ inline vector<double> WrapScalarActionsMujoco(EvalData &eval) {
 
     vector<double> vec;
     vec.reserve(wm.size());
-    for (size_t i = 0; i < wm.size(); ++i) {
-        // S6 is reserved as a neutral self-modification control. Preserve the
-        // action-vector shape, but never expose its evolving value to a task.
-        if (eval.program_out->self_modifying_ &&
-            i == kSelfModifyingDecoyRegister) {
-            vec.push_back(0.0);
-            continue;
-        }
-        double v = wm[i](0, 0);
+    for (size_t action = 0; action < wm.size(); ++action) {
+        const size_t reg = ScalarActionRegister(action, eval.program_out->self_modifying_);
+        if (reg >= wm.size()) break;
+        double v = wm[reg](0, 0);
         if (!std::isfinite(v)) v = 0.0;
         v = std::tanh(v); // squash to [-1, 1] via tanh
         vec.push_back(v);

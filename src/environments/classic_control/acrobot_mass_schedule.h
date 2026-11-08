@@ -9,12 +9,14 @@
 // episode count, and checkpoint resume. Blocks are [0,99], [100,199], ... .
 inline double AcrobotMassForGeneration(int generation, int interval,
                                       double minimum, double maximum,
-                                      unsigned int seed) {
+                                      unsigned int seed, int freeze_generation = -1) {
     if (generation < 0 || interval <= 0 || !std::isfinite(minimum) ||
         !std::isfinite(maximum) || minimum <= 0 || maximum < minimum) {
         throw std::invalid_argument("Invalid dynamic Acrobot mass schedule");
     }
     std::mt19937 rng(seed);
+    if (freeze_generation >= 0 && generation > freeze_generation)
+        generation = freeze_generation;
     rng.discard(static_cast<unsigned long long>(generation / interval));
     // Explicit conversion gives the same schedule across standard libraries.
     const double unit = static_cast<double>(rng()) / 4294967296.0;

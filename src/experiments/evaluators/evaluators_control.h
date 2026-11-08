@@ -19,7 +19,9 @@ inline void ConfigureAcrobotMass(TPG &tpg, TaskEnv *task) {
         tpg.GetParam<int>("acrobot_mass_interval"),
         tpg.GetParam<double>("acrobot_mass_min"),
         tpg.GetParam<double>("acrobot_mass_max"),
-        tpg.GetParam<int>("acrobot_mass_seed")));
+        tpg.GetParam<int>("acrobot_mass_seed"),
+        tpg.HaveParam("acrobot_mass_freeze_generation")
+            ? tpg.GetParam<int>("acrobot_mass_freeze_generation") : -1));
 }
 
 /******************************************************************************/
@@ -75,6 +77,7 @@ inline void EvalControl(TPG &tpg, EvalData &eval) {
             eval.task->Update(WrapDiscreteAction(eval),
                               WrapContinuousAction(eval), tpg.rngs_[AUX_SEED]);
         eval.stats_double[REWARD1_IDX] += r.r1;
+        eval.replay_episode_reward += r.r1;
         eval.AccumulateStepData();
         tpg.LogReplaySelfModifyingRates(eval);
         eval.n_prediction++;
@@ -116,6 +119,7 @@ inline void EvalControlViz(TPG &tpg, EvalData &eval,
             eval.task->Update(WrapDiscreteAction(eval),
                               WrapContinuousAction(eval), tpg.rngs_[AUX_SEED]);
         eval.stats_double[REWARD1_IDX] += r.r1;
+        eval.replay_episode_reward += r.r1;
         eval.AccumulateStepData();
         tpg.LogReplaySelfModifyingRates(eval);
         eval.obs->Set(eval.task->GetObsVec(eval.partially_observable));

@@ -21,4 +21,8 @@ int main() {
     try { AcrobotMassForGeneration(0, 0, 0.5, 1.5, 42); }
     catch (const std::invalid_argument &) { rejected = true; }
     assert(rejected);
+    for (int generation = 4900; generation <= 6000; ++generation) {
+        const double frozen = AcrobotMassForGeneration(generation, 100, 0.5, 1.5, 42, 5000);
+        assert(frozen == mass(generation > 5000 ? 5000 : generation));
+    }
 }
