@@ -1,6 +1,7 @@
 import argparse
 import csv
 import math
+import re
 from pathlib import Path
 
 import matplotlib
@@ -76,13 +77,22 @@ def read_checkpoint_agent_rates(path, best_team_id):
     actions = {}
     teams = {}
     four_rate_layout = set()
+    rate_registers = {}
+    config = path.parent.parent / "parameters.yaml"
+    rotation = 0
+    if config.exists():
+        match = re.search(r"(?m)^\s*self_modifying_register_rotation:\s*([0-3])\s*(?:#.*)?$",
+                          config.read_text())
+        if match:
+            rotation = int(match.group(1))
+    default_order = [(operator - rotation) % 4 for operator in range(4)]
 
     with path.open() as handle:
         for line in handle:
             fields = line.rstrip().split(":")
             if fields[0] == "MemoryEigen" and fields[2] == "0":
                 program_id = int(fields[1])
-                values = [float(value) for value in fields[4:]]
+                values = [float(value) for value in fields[5:]]
                 if len(values) >= 7:
                     start_rates[program_id] = values[2:8]
             elif fields[0] == "self_modifying_state":
@@ -91,13 +101,17 @@ def read_checkpoint_agent_rates(path, best_team_id):
                 actions[int(fields[1])] = int(fields[3])
                 if "SL4" in fields:
                     four_rate_layout.add(int(fields[1]))
+                order = next((field for field in fields[11:] if field.startswith("RO")), None)
+                if order is not None:
+                    rate_registers[int(fields[1])] = [int(slot) - 2 for slot in order[2:]]
             elif fields[0] == "team":
                 teams[int(fields[1])] = [int(value) for value in fields[7:]]
 
     # Old checkpoints include redundancy at offset 4 and decoy at offset 5.
     # New SL4 checkpoints place decoy immediately after the four active rates.
     for program_id in start_rates.keys() & output_rates.keys():
-        indices = [0, 1, 2, 3, 4 if program_id in four_rate_layout else 5]
+        indices = [*rate_registers.get(program_id, default_order),
+                   4 if program_id in four_rate_layout else 5]
         if max(indices) >= min(len(start_rates[program_id]), len(output_rates[program_id])):
             del start_rates[program_id]
             del output_rates[program_id]

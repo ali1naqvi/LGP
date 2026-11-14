@@ -4,6 +4,7 @@
 #include "instruction.h"
 #include "MutationRateGenome.h"
 #include <array>
+#include <optional>
 
 class EvalData;
 
@@ -66,12 +67,12 @@ class RegisterMachine {
                    std::unordered_map<std::string, int> &state, mt19937 &rng,
                    std::vector<bool> &legalOps);
 
-   // Create RegisterMachine and copy instructions
-   // If inherited_n_memories > 0, use that value instead of sampling from config
+   // Create a crossover child with its primary parent's register layout.
    RegisterMachine(long action, std::vector<instruction*> &instructions,
                    std::unordered_map<std::string, std::any>& params,
                    std::unordered_map<std::string, int>& state, mt19937& rng,
-                   std::vector<bool>& legal_ops, int inherited_n_memories = -1);
+                   std::vector<bool>& legal_ops, int inherited_n_memories = -1,
+                   const RegisterMachine* parent = nullptr);
 
    // Copy contructor
    RegisterMachine(RegisterMachine &rm);
@@ -187,6 +188,9 @@ class RegisterMachine {
    std::array<double, kSelfModifyingRegisterCount> MutationProbabilities(
        const std::unordered_map<std::string, std::any>& params) const;
 
+   std::array<size_t, kSelfModifyingRegisterCount> RateRegisters(
+       const std::unordered_map<std::string, std::any>& params) const;
+
    void MutateMemorySize(std::unordered_map<std::string, std::any> &params,
                          std::unordered_map<std::string, int> &state,
                          mt19937 &rng);
@@ -226,6 +230,10 @@ class RegisterMachine {
          }
       }
    }
+
+  private:
+   // Explicit per-program mapping used by the randomized-order condition.
+   std::optional<std::array<size_t, kSelfModifyingRegisterCount>> rate_registers_;
 };
 
 struct RegisterMachineBidLexicalCompare {

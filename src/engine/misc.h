@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <any>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -15,6 +16,7 @@
 #include <random>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <unordered_map>
 #include <vector>
 
@@ -128,8 +130,7 @@ inline double sigmoid(double x, double m) { return 1 / (1 + exp(-(m * x))); }
 inline double sigmoid(double x) { return 1 / (1 + exp(-x)); }
 
 // Scalar register layout for self-modifying programs:
-// S0 = bid, S1 = action, S2-S5 = swap/delete/add/point-mutation
-// rates, S6 = decoy.
+// S0 = bid, S1 = action, S2-S5 = mutation rates, S6 = decoy.
 constexpr size_t kBidRegister = 0;
 constexpr size_t kActionRegister = 1;
 constexpr size_t kSelfModifyingFirstRegister = 2;
@@ -138,6 +139,29 @@ constexpr size_t kSelfModifyingRequiredRegisterCount =
     kSelfModifyingFirstRegister + kSelfModifyingRegisterCount;
 constexpr size_t kSelfModifyingDecoyRegister = kSelfModifyingRequiredRegisterCount;
 constexpr size_t kSelfModifyingMinScalarRegisters = kSelfModifyingDecoyRegister + 1;
+
+inline bool RandomizeSelfModifyingRegisterOrder(
+    const std::unordered_map<std::string, std::any>& params) {
+   const auto setting = params.find("randomize_self_modifying_register_order");
+   return setting != params.end() && std::any_cast<int>(setting->second) != 0;
+}
+
+// Return register indices in operator order (swap, delete, add, point mutation).
+// A positive rotation shifts the assignments in S2-S5 to the left.
+inline std::array<size_t, kSelfModifyingRegisterCount> SelfModifyingRateRegisters(
+    const std::unordered_map<std::string, std::any>& params) {
+   const auto setting = params.find("self_modifying_register_rotation");
+   const int rotation = setting == params.end() ? 0 : std::any_cast<int>(setting->second);
+   if (rotation < 0 || rotation >= static_cast<int>(kSelfModifyingRegisterCount)) {
+      throw std::invalid_argument("self_modifying_register_rotation must be an integer from 0 through 3");
+   }
+   std::array<size_t, kSelfModifyingRegisterCount> registers{};
+   for (size_t rate = 0; rate < registers.size(); ++rate) {
+      registers[rate] = kSelfModifyingFirstRegister +
+          (rate + registers.size() - rotation) % registers.size();
+   }
+   return registers;
+}
 
 inline size_t ScalarActionRegister(size_t action, bool self_modifying) {
    // Keep mutation outputs and the neutral decoy out of actuator controls.

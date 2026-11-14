@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <optional>
+#include <string_view>
 
 namespace {
 
@@ -184,6 +185,10 @@ std::string RegisterMachine::ToString(bool effective_only) {
    }
    oss << ":SM" << (self_modifying_ ? 1 : 0);
    oss << ":SL4"; // Four mutation rates; S6 is the decoy.
+   if (rate_registers_) {
+      oss << ":RO";
+      for (size_t reg : *rate_registers_) oss << reg;
+   }
    const auto rate_genes = mutation_rate_genome_.Encode();
    if (!rate_genes.empty()) oss << ":" << rate_genes;
    // for (auto &i : private_memory_ids_) oss << ":" << i;
@@ -448,6 +453,13 @@ RegisterMachine::RegisterMachine(
    operations_additive_ = OperationsAdditiveEnabled(params);
    gtime_ = state["t_current"];
    id_ = state["program_count"]++;
+   if (self_modifying_ && RandomizeSelfModifyingRegisterOrder(params)) {
+      rate_registers_ = SelfModifyingRateRegisters(params);
+      // Keep founder assignments independent of the evolution RNG stream.
+      std::seed_seq seed{std::any_cast<int>(params.at("seed_tpg")), static_cast<int>(id_)};
+      std::mt19937 order_rng(seed);
+      std::shuffle(rate_registers_->begin(), rate_registers_->end(), order_rng);
+   }
    nrefs_ = 0;
    matrix_modulation = (std::any_cast<int>(params["matrix_modulation"]) == 1);
    coordination_allowed = (std::any_cast<int>(params["dynamic_lgp"]) == 1);
@@ -519,10 +531,12 @@ RegisterMachine::RegisterMachine(
     long action, std::vector<instruction*> &instructions,
     std::unordered_map<std::string, std::any> &params,
     std::unordered_map<std::string, int> &state, mt19937 &rng,
-    std::vector<bool> &legal_ops, int inherited_n_memories) {
+    std::vector<bool> &legal_ops, int inherited_n_memories,
+    const RegisterMachine* parent) {
    mutation_rate_genome_ = MutationRateGenome::FromParams(params);
    action_ = action;
    self_modifying_ = SelfModifyingEnabled(params);
+   if (self_modifying_ && parent) rate_registers_ = parent->rate_registers_;
    stateful_ = std::any_cast<int>(params["stateful"]);
    operations_additive_ = OperationsAdditiveEnabled(params);
    gtime_ = state["t_current"];
@@ -589,6 +603,7 @@ RegisterMachine::RegisterMachine(
 
 // Copy Contructor
 RegisterMachine::RegisterMachine(RegisterMachine& rm) {
+   rate_registers_ = rm.rate_registers_;
    mutation_rate_genome_ = rm.mutation_rate_genome_;
    action_ = rm.action_;
    gtime_ = rm.gtime_;
@@ -624,6 +639,7 @@ RegisterMachine::RegisterMachine(
    mutation_rate_genome_ = rm.mutation_rate_genome_;
    action_ = rm.action_;
    self_modifying_ = SelfModifyingEnabled(params);
+   if (self_modifying_) rate_registers_ = rm.rate_registers_;
    gtime_ = state["t_current"];
    id_ = state["program_count"]++;
    obs_index_ = rm.obs_index_;
@@ -694,6 +710,22 @@ RegisterMachine::RegisterMachine(
    const bool current_layout = f < static_cast<int>(outcomeFields.size()) &&
                                outcomeFields[f] == "SL4";
    if (current_layout) ++f;
+   if (f < static_cast<int>(outcomeFields.size()) &&
+       outcomeFields[f].starts_with("RO")) {
+      const auto& token = outcomeFields[f++];
+      constexpr std::string_view slots = "2345";
+      if (!self_modifying_ || token.size() != 2 + slots.size() ||
+          !std::is_permutation(token.begin() + 2, token.end(), slots.begin())) {
+         throw std::runtime_error("Invalid mutation register order in checkpoint");
+      }
+      rate_registers_.emplace();
+      for (size_t op = 0; op < rate_registers_->size(); ++op) {
+         (*rate_registers_)[op] = token[2 + op] - '0';
+      }
+   } else if (self_modifying_ && current_layout &&
+              RandomizeSelfModifyingRegisterOrder(params)) {
+      throw std::runtime_error("Missing randomized mutation register order in checkpoint");
+   }
    if (f < static_cast<int>(outcomeFields.size()) &&
        outcomeFields[f].rfind("MRG", 0) == 0) {
       mutation_rate_genome_.Decode(outcomeFields[f++], params);
@@ -1132,6 +1164,11 @@ std::array<bool, 4> RegisterMachine::SelfModifyingRateSelection(
    return selected;
 }
 
+std::array<size_t, kSelfModifyingRegisterCount> RegisterMachine::RateRegisters(
+    const std::unordered_map<std::string, std::any>& params) const {
+   return rate_registers_ ? *rate_registers_ : SelfModifyingRateRegisters(params);
+}
+
 std::array<double, kSelfModifyingRegisterCount> RegisterMachine::MutationProbabilities(
     const std::unordered_map<std::string, std::any>& params) const {
       double p_swap = std::any_cast<double>(params.at("p_instructions_swap"));
@@ -1151,11 +1188,12 @@ std::array<double, kSelfModifyingRegisterCount> RegisterMachine::MutationProbabi
                 "self_modifying requires scalar registers S0-S6.");
          }
          const auto selected = SelfModifyingRateSelection(params);
+         const auto registers = RateRegisters(params);
          const double rate_values[kSelfModifyingRegisterCount] = {
-             scalar_memory->working_memory_[kSelfModifyingFirstRegister](0, 0),
-             scalar_memory->working_memory_[kSelfModifyingFirstRegister + 1](0, 0),
-             scalar_memory->working_memory_[kSelfModifyingFirstRegister + 2](0, 0),
-             scalar_memory->working_memory_[kSelfModifyingFirstRegister + 3](0, 0)};
+             scalar_memory->working_memory_[registers[0]](0, 0),
+             scalar_memory->working_memory_[registers[1]](0, 0),
+             scalar_memory->working_memory_[registers[2]](0, 0),
+             scalar_memory->working_memory_[registers[3]](0, 0)};
          if (selected[0]) p_swap = SelfModifyingRawTendencyToProbability(rate_values[0]);
          if (selected[1]) p_delete = SelfModifyingRawTendencyToProbability(rate_values[1]);
          if (selected[2]) p_add = SelfModifyingRawTendencyToProbability(rate_values[2]);
@@ -1317,48 +1355,36 @@ void RegisterMachine::ConfigureSelfModifyingRegisters(
           "self_modifying requires scalar registers S0-S6.");
    }
 
-   const double values[kSelfModifyingRegisterCount] = {
-       std::any_cast<double>(params["p_instructions_swap"]),
-       std::any_cast<double>(params["p_instructions_delete"]),
-       std::any_cast<double>(params["p_instructions_add"]),
-       std::any_cast<double>(params["p_instructions_mutate"])};
-
-   for (size_t i = 0; i < kSelfModifyingRegisterCount; ++i) {
-      const size_t reg = kSelfModifyingFirstRegister + i;
-      // New programs begin at the configured rates. Existing programs retain
-      // inherited values, which p_memory_mu_const may evolve.
-      if (initialize_working_memory) {
-         scalar_memory->const_memory_[reg](0, 0) =
-             SelfModifyingProbabilityToRawTendency(values[i]);
-         scalar_memory->working_memory_[reg](0, 0) =
-             scalar_memory->const_memory_[reg](0, 0);
-      } else {
+   use_evolved_const_ = true;
+   if (!initialize_working_memory) {
+      for (size_t reg = kSelfModifyingFirstRegister;
+           reg <= kSelfModifyingDecoyRegister; ++reg) {
          scalar_memory->const_memory_[reg](0, 0) =
              SanitizeSelfModifyingRawTendency(scalar_memory->const_memory_[reg](0, 0));
       }
+      return;
    }
 
-   // Neutral decoy register: seed to the mean initial rate so its drift is
-   // directly comparable to the rate registers, then leave it untouched by any
-   // rate-consuming code path.
-   if (scalar_memory->n_memories_ > kSelfModifyingDecoyRegister) {
-      if (initialize_working_memory) {
-         double mean_initial_rate = 0.0;
-         for (size_t i = 0; i < kSelfModifyingRegisterCount; ++i) {
-            mean_initial_rate += values[i];
-         }
-         mean_initial_rate /= static_cast<double>(kSelfModifyingRegisterCount);
-         scalar_memory->const_memory_[kSelfModifyingDecoyRegister](0, 0) =
-             SelfModifyingProbabilityToRawTendency(mean_initial_rate);
-         scalar_memory->working_memory_[kSelfModifyingDecoyRegister](0, 0) =
-             scalar_memory->const_memory_[kSelfModifyingDecoyRegister](0, 0);
-      } else {
-         scalar_memory->const_memory_[kSelfModifyingDecoyRegister](0, 0) =
-             SanitizeSelfModifyingRawTendency(
-                 scalar_memory->const_memory_[kSelfModifyingDecoyRegister](0, 0));
+   // The random condition keeps the seeded raw values already sampled by SetupMemory.
+   const auto randomize = params.find("randomize_self_modifying_constants");
+   if (randomize == params.end() || std::any_cast<int>(randomize->second) == 0) {
+      const double values[kSelfModifyingRegisterCount] = {
+          std::any_cast<double>(params["p_instructions_swap"]),
+          std::any_cast<double>(params["p_instructions_delete"]),
+          std::any_cast<double>(params["p_instructions_add"]),
+          std::any_cast<double>(params["p_instructions_mutate"])};
+      const auto registers = RateRegisters(params);
+      double rate_sum = 0.0;
+      for (size_t i = 0; i < kSelfModifyingRegisterCount; ++i) {
+         scalar_memory->const_memory_[registers[i]](0, 0) =
+             SelfModifyingProbabilityToRawTendency(values[i]);
+         rate_sum += values[i];
       }
+      // Match the decoy to the mean starting probability for the fixed initialization.
+      scalar_memory->const_memory_[kSelfModifyingDecoyRegister](0, 0) =
+          SelfModifyingProbabilityToRawTendency(rate_sum / kSelfModifyingRegisterCount);
    }
-   use_evolved_const_ = true;
+   SeedSelfModifyingWorkingFromConstants(params);
 }
 
 void RegisterMachine::SeedSelfModifyingWorkingFromConstants(

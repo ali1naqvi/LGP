@@ -1898,6 +1898,7 @@ void TPG::InitTeams() {
 // Certain parameters must be processed here
 void TPG::ProcessParams() {
    RegisterMachine::SelfModifyingRateSelection(params_);
+   SelfModifyingRateRegisters(params_);
    MutationRateGenome::FromParams(params_);
    for (const char* key : {"predator_population_self_modifying",
                            "prey_population_self_modifying"}) {
@@ -1950,6 +1951,9 @@ void TPG::SetParams(int argc, char** argv) {
    // By default S2-S6 constants retain their historical ability to evolve.
    // Set this to 0 for the fixed-constant self-modification ablation.
    params_["evolve_self_modifying_constants"] = 1;
+   params_["randomize_self_modifying_constants"] = 0;
+   params_["self_modifying_register_rotation"] = 0;
+   params_["randomize_self_modifying_register_order"] = 0;
    // Preserve parent-produced rates through offspring mutation by default.
    // Set to 1 to reset working S2-S6 from constants before mutation instead.
    params_["reset_self_modifying_before_mutation"] = 0;
@@ -3264,22 +3268,23 @@ void TPG::printTeamInfo(long t, int phase, bool singleBest, bool multitask, long
                              kSelfModifyingMinScalarRegisters) {
                         continue;
                      }
+                     const auto registers = prog->RateRegisters(params_);
                      const double output_swap =
-                         scalar_memory->working_memory_[kSelfModifyingFirstRegister](0, 0);
+                         scalar_memory->working_memory_[registers[0]](0, 0);
                      const double output_delete =
-                         scalar_memory->working_memory_[kSelfModifyingFirstRegister + 1](0, 0);
+                         scalar_memory->working_memory_[registers[1]](0, 0);
                      const double output_add =
-                         scalar_memory->working_memory_[kSelfModifyingFirstRegister + 2](0, 0);
+                         scalar_memory->working_memory_[registers[2]](0, 0);
                      const double output_mutate =
-                         scalar_memory->working_memory_[kSelfModifyingFirstRegister + 3](0, 0);
+                         scalar_memory->working_memory_[registers[3]](0, 0);
                      const double start_swap =
-                         scalar_memory->const_memory_[kSelfModifyingFirstRegister](0, 0);
+                         scalar_memory->const_memory_[registers[0]](0, 0);
                      const double start_delete =
-                         scalar_memory->const_memory_[kSelfModifyingFirstRegister + 1](0, 0);
+                         scalar_memory->const_memory_[registers[1]](0, 0);
                      const double start_add =
-                         scalar_memory->const_memory_[kSelfModifyingFirstRegister + 2](0, 0);
+                         scalar_memory->const_memory_[registers[2]](0, 0);
                      const double start_mutate =
-                         scalar_memory->const_memory_[kSelfModifyingFirstRegister + 3](0, 0);
+                         scalar_memory->const_memory_[registers[3]](0, 0);
                      team_output_swap_sum += selected_rates[0]
                          ? SelfModifyingRawTendencyToProbability(output_swap)
                          : MutationRateGenome::Number(params_, "p_instructions_swap", 0.0);
@@ -3672,7 +3677,7 @@ void TPG::RegisterMachineCrossover(RegisterMachine* p1, RegisterMachine* p2,
    c1_instructions.insert(c1_instructions.end(), p1_chunks[2].begin(),
                           p1_chunks[2].end());
    *c1 = new RegisterMachine(p1->action_, c1_instructions, p1_params, state_,
-                             rngs_[TPG_SEED], _ops, p1->n_memories_);
+                             rngs_[TPG_SEED], _ops, p1->n_memories_, p1);
    (*c1)->mutation_rate_genome_ = p1->mutation_rate_genome_;
 
    // Cretae child 2 (c2) from parent chunks {p2-0, p1-1, p2-2}
@@ -3684,7 +3689,7 @@ void TPG::RegisterMachineCrossover(RegisterMachine* p1, RegisterMachine* p2,
    c2_instructions.insert(c2_instructions.end(), p2_chunks[2].begin(),
                           p2_chunks[2].end());
    *c2 = new RegisterMachine(p2->action_, c2_instructions, p2_params, state_,
-                             rngs_[TPG_SEED], _ops, p2->n_memories_);
+                             rngs_[TPG_SEED], _ops, p2->n_memories_, p2);
    (*c2)->mutation_rate_genome_ = p2->mutation_rate_genome_;
 }
 
@@ -3746,9 +3751,9 @@ void TPG::LinearCrossover(RegisterMachine* gp1,
 
     // Fallback: Clone if too small to cut
     if (mods1.size() < 2 || mods2.size() < 2) {
-        *c1 = new RegisterMachine(gp1->action_, gp1->instructions_, gp1_params, state_, rngs_[TPG_SEED], _ops, gp1->n_memories_);
+        *c1 = new RegisterMachine(gp1->action_, gp1->instructions_, gp1_params, state_, rngs_[TPG_SEED], _ops, gp1->n_memories_, gp1);
         (*c1)->mutation_rate_genome_ = gp1->mutation_rate_genome_;
-        *c2 = new RegisterMachine(gp2->action_, gp2->instructions_, gp2_params, state_, rngs_[TPG_SEED], _ops, gp2->n_memories_);
+        *c2 = new RegisterMachine(gp2->action_, gp2->instructions_, gp2_params, state_, rngs_[TPG_SEED], _ops, gp2->n_memories_, gp2);
         (*c2)->mutation_rate_genome_ = gp2->mutation_rate_genome_;
         return;
     }
@@ -3839,9 +3844,9 @@ void TPG::LinearCrossover(RegisterMachine* gp1,
     build_prog(gp1, gp2, owner_c1, c1_instrs);
     build_prog(gp1, gp2, owner_c2, c2_instrs);
 
-    *c1 = new RegisterMachine(gp1->action_, c1_instrs, gp1_params, state_, rngs_[TPG_SEED], _ops, gp1->n_memories_);
+    *c1 = new RegisterMachine(gp1->action_, c1_instrs, gp1_params, state_, rngs_[TPG_SEED], _ops, gp1->n_memories_, gp1);
     (*c1)->mutation_rate_genome_ = gp1->mutation_rate_genome_;
-    *c2 = new RegisterMachine(gp2->action_, c2_instrs, gp2_params, state_, rngs_[TPG_SEED], _ops, gp2->n_memories_);
+    *c2 = new RegisterMachine(gp2->action_, c2_instrs, gp2_params, state_, rngs_[TPG_SEED], _ops, gp2->n_memories_, gp2);
     (*c2)->mutation_rate_genome_ = gp2->mutation_rate_genome_;
 }
 
@@ -4668,8 +4673,9 @@ void TPG::LogReplaySelfModifyingRates(const EvalData& eval_data) {
           memory->working_memory_.size() < kSelfModifyingMinScalarRegisters) {
          continue;
       }
+      const auto registers = prog->RateRegisters(params_);
       for (size_t rate = 0; rate < kSelfModifyingRegisterCount; ++rate) {
-         const size_t reg = kSelfModifyingFirstRegister + rate;
+         const size_t reg = registers[rate];
          start[rate] += SanitizeSelfModifyingRawTendency(
              memory->const_memory_[reg](0, 0));
          output[rate] += SanitizeSelfModifyingRawTendency(

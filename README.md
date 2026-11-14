@@ -171,6 +171,49 @@ With episode resets enabled and reset-before-mutation disabled, mutation uses
 the final episode's output rates. You can also pass
 `reset_self_modifying_per_episode=1` on the command line after `parameters_file`.
 
+### Classic-control evolved-constant initialization
+
+From the repository root on Slurm, rebuild `TPGExperimentMPI` and run
+`sbatch scripts/run/classic-control-evolved-constants.slurm`. The array runs
+Acrobot, Pendulum, and MountainCarContinuous with three starting conditions
+each. The first two initialize every instruction mutation rate at 0.2 or 0.4.
+The third sets `randomize_self_modifying_constants=1`, which initializes S2–S6
+from the same seeded uniform raw values in `[-1, 1]` as ordinary scalar
+constants. The sigmoid converts those raw values to initial mutation
+probabilities of approximately 0.269–0.731 in S2–S5.
+
+Each environment and starting condition uses seeds 1–20 to match the
+corresponding 0.1 baseline runs. The array submits 180 jobs and runs up to four
+at a time. The runs use the parent configurations' 5,000-generation horizon and
+0.25 probability of mutating constants. Results go under
+`experiments/classic_control_evolved_constants/`.
+
+### Classic-control mutation register order
+
+Rebuild `TPGExperimentMPI` and submit
+`sbatch scripts/run/changed-mutation-order.slurm` from the repository root.
+The `changed_mutation_order` variants use the same three cyclic rotations in
+Acrobot, Pendulum, and MountainCarContinuous.
+
+| Variant | S2 | S3 | S4 | S5 |
+| --- | --- | --- | --- | --- |
+| Baseline | Swap | Delete | Add | Point mutation |
+| Rotation 1 | Delete | Add | Point mutation | Swap |
+| Rotation 2 | Add | Point mutation | Swap | Delete |
+| Rotation 3 | Point mutation | Swap | Delete | Add |
+
+All four instruction mutation probabilities start at 0.1. S6 remains the
+decoy. The fourth variant, `randomized_per_individual`, draws a uniform
+permutation of S2–S5 independently for each founder. The draw uses the
+evolution seed and founder program ID. Offspring inherit their parent's
+assignment, and each program's checkpoint record stores it.
+
+Each environment and variant uses seeds 1–20 and 5,000 generations, for 240
+runs. Tasks 1–180 are the rotations. Submit with `--array=181-240%4` to run
+the 60 randomized jobs by themselves. Each run saves its settings in
+`parameters.yaml` under `experiments/changed_mutation_order/`. Use that config
+for replay or resume.
+
 ### 5. Plot results
 
 New selection CSVs include `self_modification_only_instruction_count`: the
